@@ -159,6 +159,10 @@
     "source": "builtin:side-chat",
     "enabled": true
   },
+  "thread-graph": {
+    "source": "path:/Users/tripp/projects/bb-config/bb-plugin-thread-graph",
+    "enabled": true
+  },
   "thread-list": {
     "source": "builtin:thread-list",
     "enabled": true
