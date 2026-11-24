@@ -11,6 +11,10 @@
     "source": "builtin:ask-user-question",
     "enabled": true
   },
+  "auto-collapse-composer": {
+    "source": "path:/Users/tripp/projects/bb-config/bb-plugin-auto-collapse-composer",
+    "enabled": true
+  },
   "automations": {
     "source": "builtin:automations",
     "enabled": true

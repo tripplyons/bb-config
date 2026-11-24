@@ -9,6 +9,7 @@ This repo holds my bb configuration. bb stores its settings in `~/.bb/bb.db`, so
 - `plugins/plugins.json`: every installed plugin, with its source and whether it is enabled. Run `./scripts/plugins.py export` after you change plugins in bb to update it.
 - `scripts/plugins.py`: exports the plugin list from bb, or applies it. Apply installs missing plugins and enables or disables each one to match. It reports plugins that are installed but not in the file, and leaves them alone.
 - `bb-plugin-thread-graph/`: my Thread Graph plugin. `plugins.json` installs it from this path. Run `npm install` and `bb plugin build .` in it before `apply.sh` on a new machine, because `dist/` is not committed.
+- `bb-plugin-auto-collapse-composer/`: collapses the message composer inside threads when it is both empty and unfocused. `plugins.json` installs it from this path. Run `npm install` and `bb plugin build .` in it before `apply.sh` on a new machine, because `dist/` is not committed.
 - `settings/`: other bb settings.
   - `general.json`: Settings → General preferences, such as keyboard hints and the default provider.
   - `experiments.json`: experiment toggles.
