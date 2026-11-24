@@ -16,7 +16,7 @@ This repo holds my bb configuration. bb stores its settings in `~/.bb/bb.db`, so
   - `instructions.md`: custom instructions bb adds for every agent.
 - `scripts/settings.py`: exports or applies the files in `settings/`.
 - `export.sh`: copies the current plugin list and settings from bb into this repo. Run it after you change something in the bb app.
-- `apply.sh`: copies the theme into `~/.bb/theme`, runs `bb theme set tripp`, and writes the ACP agents with `bb plugin config`.
+- `apply.sh`: applies the plugin list and settings, writes the ACP agents with `bb plugin config`, copies the theme into `~/.bb/theme`, and runs `bb theme set tripp`.
 
 ## Export and apply
 
