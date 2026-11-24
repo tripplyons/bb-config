@@ -62,3 +62,8 @@ div[style*="display: flow-root"] > div.mt-4.px-2 {
 .chat-prompt-box > .space-y-2 > .grid:not(:has(> :not([data-bb-plugin-root]:empty))) {
   display: none;
 }
+
+/* Remove the shadow the message box casts upward onto the transcript. */
+form.shadow-lift {
+  box-shadow: none;
+}
