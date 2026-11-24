@@ -1,0 +1,12 @@
+{
+  "agentCpuPriority": false,
+  "compactExpiredCache": false,
+  "keyedPluginCss": false,
+  "serverMove": false,
+  "performanceDiagnostics": false,
+  "pluginUpdates": false,
+  "resumeDaemonSessions": false,
+  "skipFocusedThreadNotifications": false,
+  "threadContextCard": false,
+  "walCheckpointWorker": false
+}

@@ -1,0 +1,23 @@
+{
+  "showKeyboardHints": true,
+  "steerActiveThreadOnEnter": true,
+  "terminalCopyOnSelect": true,
+  "confirmThreadArchive": true,
+  "showDiagnosticEvents": false,
+  "keepHistoryAfterContextClear": false,
+  "summarizeShellCommands": true,
+  "resumeThreadsAfterRestart": false,
+  "providerOrder": [],
+  "defaultProviderId": null,
+  "providerCompletedTurnDisplay": {},
+  "streamerMode": false,
+  "allowFastServiceTier": true,
+  "telemetryEnabled": true,
+  "managedBranchPrefix": "bb/",
+  "idleProviderSessionTimeoutMinutes": 30,
+  "machineServerUrl": null,
+  "machineGitCredentialsEnabled": true,
+  "defaultMachineAccess": null,
+  "earlyAdopter": false,
+  "showUnhandledProviderEvents": false
+}
