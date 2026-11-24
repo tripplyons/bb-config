@@ -1,0 +1,58 @@
+{
+  "ask-user-question": {
+    "questionTimeout": "30 minutes"
+  },
+  "bb--git": {
+    "showGitChanges": true,
+    "showCommitButton": false
+  },
+  "bb--github-pr-status": {
+    "showPullRequest": true
+  },
+  "bb-guide": {
+    "introduction": true,
+    "skills": true,
+    "bbCli": true,
+    "pluginAuthoring": true,
+    "skillCreator": true,
+    "submitPlugin": true
+  },
+  "connect": {
+    "remoteAccess": true,
+    "sendRemoteInstructions": true
+  },
+  "provider-claude-code": {
+    "memoryEnabled": true,
+    "subagentsDisabled": false,
+    "workflowsDisabled": false,
+    "disable1MContext": false,
+    "chromeEnabled": false,
+    "artifactsEnabled": false,
+    "sandboxEnabled": true,
+    "fullAccessApprovalsEnabled": false,
+    "commandDescriptionsEnabled": false
+  },
+  "provider-codex": {
+    "memoryEnabled": true,
+    "subagentsDisabled": false
+  },
+  "provider-retry": {
+    "maximumWait": "6 hours"
+  },
+  "push-notifications": {
+    "mobileEnabled": true,
+    "webEnabled": true,
+    "desktopEnabled": true,
+    "defaultLevel": "all",
+    "childLevel": "input-only",
+    "expoPushUrl": "https://exp.host/--/api/v2/push/send"
+  },
+  "workflows": {
+    "maxActiveRuns": 4,
+    "maxConcurrentAgents": 8,
+    "maxAgentCalls": 100,
+    "totalRunTimeoutMs": 86400000,
+    "retentionDays": 7,
+    "maxNotificationBytes": 16384
+  }
+}

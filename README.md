@@ -14,6 +14,9 @@ This repo holds my bb configuration. bb stores its settings in `~/.bb/bb.db`, so
   - `ui.json`: UI preferences you have changed, such as sidebar layout. Preferences left at their defaults are not listed.
   - `keyboard.json`: keyboard shortcut overrides. An empty list means bb's default shortcuts.
   - `instructions.md`: custom instructions bb adds for every agent.
+  - `plugin-config.json`: each plugin's own settings, such as notification channels and levels, workflow limits, and provider options. The ACP agents and custom instructions live in their own files instead.
+  - `keep-awake.json`: whether Keep Awake stops hosts from sleeping, and which hosts.
+  - `concurrency.json`: the overall thread limit (`null` means unlimited) and per-host overrides keyed by host id. A host not listed uses the automatic limit, one thread per processor.
 - `scripts/settings.py`: exports or applies the files in `settings/`.
 - `export.sh`: copies the current plugin list and settings from bb into this repo. Run it after you change something in the bb app.
 - `apply.sh`: applies the plugin list and settings, writes the ACP agents with `bb plugin config`, copies the theme into `~/.bb/theme`, and runs `bb theme set tripp`.
