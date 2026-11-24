@@ -1,6 +1,6 @@
 /* Larger text: the app sizes text in rem, so this scales the whole UI. Default is 16px. */
 html {
-  font-size: 18px;
+  font-size: 20px;
 }
 
 :root,
