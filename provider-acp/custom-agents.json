@@ -3,6 +3,13 @@
     "id": "antigravity",
     "displayName": "Google Antigravity",
     "command": "/opt/homebrew/bin/agy",
-    "args": ["acp"]
+    "args": ["acp"],
+    "nativeSkillRoots": {
+      "user": [".gemini/config/skills"],
+      "project": [
+        { "path": ".agents/skills", "ancestors": true },
+        { "path": ".agent/skills", "ancestors": true }
+      ]
+    }
   }
 ]
