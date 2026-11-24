@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "command": "thread.archive",
+    "shortcut": {
+      "key": "s",
+      "mod": true,
+      "meta": false,
+      "control": false,
+      "alt": false,
+      "shift": false
+    },
+    "platform": "mac"
+  }
+]
