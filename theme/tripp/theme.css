@@ -35,3 +35,30 @@ div[style*="display: flow-root"] > div[class="mt-4"],
 div[style*="display: flow-root"] > div.mt-4.px-2 {
   display: none;
 }
+
+/*
+ * Shrink the gap between the last message and the message box. These selectors match bb's
+ * markup, which has no stable names here, so a bb update can break them.
+ */
+
+/* The transcript's bottom padding: 1rem by default. */
+[class~="max-w-[760px]"][class~="pb-4"][class~="pt-4"] {
+  padding-bottom: 0.25rem;
+}
+
+/*
+ * The indicator wrappers at the end of the transcript. With their content hidden above they
+ * are 0px tall, but the list still puts a gap before each. Hide a wrapper unless it holds
+ * an indicator that still shows.
+ */
+[class~="max-w-[760px]"][class~="pb-4"]
+  div[style*="transition: height"]:not(
+    :has(> div[style*="display: flow-root"] > :not([class="mt-4"]):not(.mt-4.px-2))
+  ) {
+  display: none;
+}
+
+/* The plugin row above the message box, while every plugin slot in it is empty. */
+.chat-prompt-box > .space-y-2 > .grid:not(:has(> :not([data-bb-plugin-root]:empty))) {
+  display: none;
+}
