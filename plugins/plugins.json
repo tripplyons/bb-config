@@ -1,0 +1,170 @@
+{
+  "account-pool": {
+    "source": "builtin:account-pool",
+    "enabled": false
+  },
+  "agent-annotations": {
+    "source": "builtin:agent-annotations",
+    "enabled": true
+  },
+  "ask-user-question": {
+    "source": "builtin:ask-user-question",
+    "enabled": true
+  },
+  "automations": {
+    "source": "builtin:automations",
+    "enabled": true
+  },
+  "bb--composer": {
+    "source": "builtin:composer",
+    "enabled": true
+  },
+  "bb--connect-next": {
+    "source": "builtin:connect-next",
+    "enabled": false
+  },
+  "bb--git": {
+    "source": "builtin:git",
+    "enabled": true
+  },
+  "bb--github-pr-status": {
+    "source": "builtin:github-pr-status",
+    "enabled": true
+  },
+  "bb--github-star": {
+    "source": "builtin:github-star",
+    "enabled": true
+  },
+  "bb--mcp": {
+    "source": "builtin:mcp",
+    "enabled": false
+  },
+  "bb--prompt-library": {
+    "source": "builtin:prompt-library",
+    "enabled": false
+  },
+  "bb--provider-usage": {
+    "source": "builtin:provider-usage",
+    "enabled": true
+  },
+  "bb--storage-retention": {
+    "source": "builtin:storage-retention",
+    "enabled": false
+  },
+  "bb-account": {
+    "source": "builtin:bb-account",
+    "enabled": true
+  },
+  "bb-ai": {
+    "source": "builtin:bb-ai",
+    "enabled": true
+  },
+  "bb-guide": {
+    "source": "builtin:bb-guide",
+    "enabled": true
+  },
+  "browser-automation": {
+    "source": "builtin:browser-automation",
+    "enabled": true
+  },
+  "concurrency-limit": {
+    "source": "builtin:concurrency-limit",
+    "enabled": true
+  },
+  "connect": {
+    "source": "builtin:connect",
+    "enabled": true
+  },
+  "custom-instructions": {
+    "source": "builtin:custom-instructions",
+    "enabled": true
+  },
+  "drafts": {
+    "source": "builtin:drafts",
+    "enabled": true
+  },
+  "environment-git-worktree": {
+    "source": "builtin:environment-git-worktree",
+    "enabled": true
+  },
+  "environment-personal-workspace": {
+    "source": "builtin:environment-personal-workspace",
+    "enabled": true
+  },
+  "environment-project-checkout": {
+    "source": "builtin:environment-project-checkout",
+    "enabled": true
+  },
+  "inline-vis": {
+    "source": "builtin:inline-vis",
+    "enabled": true
+  },
+  "keep-awake": {
+    "source": "builtin:keep-awake",
+    "enabled": true
+  },
+  "monaco-editor": {
+    "source": "builtin:monaco-editor",
+    "enabled": false
+  },
+  "navigation": {
+    "source": "builtin:navigation",
+    "enabled": true
+  },
+  "pdf-preview": {
+    "source": "builtin:pdf-preview",
+    "enabled": true
+  },
+  "plugin-api-docs": {
+    "source": "builtin:plugin-api-docs",
+    "enabled": false
+  },
+  "plugin-api-tester": {
+    "source": "builtin:plugin-api-tester",
+    "enabled": false
+  },
+  "provider-acp": {
+    "source": "builtin:provider-acp",
+    "enabled": true
+  },
+  "provider-claude-code": {
+    "source": "builtin:provider-claude-code",
+    "enabled": true
+  },
+  "provider-codex": {
+    "source": "builtin:provider-codex",
+    "enabled": true
+  },
+  "provider-pi": {
+    "source": "builtin:provider-pi",
+    "enabled": true
+  },
+  "provider-retry": {
+    "source": "builtin:provider-retry",
+    "enabled": true
+  },
+  "push-notifications": {
+    "source": "builtin:push-notifications",
+    "enabled": true
+  },
+  "scheduled-send": {
+    "source": "builtin:scheduled-send",
+    "enabled": true
+  },
+  "secrets": {
+    "source": "builtin:secrets",
+    "enabled": true
+  },
+  "side-chat": {
+    "source": "builtin:side-chat",
+    "enabled": true
+  },
+  "thread-list": {
+    "source": "builtin:thread-list",
+    "enabled": true
+  },
+  "workflows": {
+    "source": "builtin:workflows",
+    "enabled": true
+  }
+}

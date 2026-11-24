@@ -3,6 +3,9 @@
 set -eu
 cd "$(dirname "$0")"
 
+# Plugins: install missing ones and match enabled state
+./scripts/plugins.py apply
+
 # ACP custom agents
 agents=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))' provider-acp/custom-agents.json)
 bb plugin config provider-acp set customAgents "$agents"
