@@ -73,3 +73,29 @@ form.shadow-lift {
 div.pointer-events-none.absolute.-top-6.bg-gradient-to-b.to-background {
   display: none;
 }
+
+/*
+ * Shrink the gap below an assistant message that a tool row ("Ran 1 command") follows. bb
+ * reserves a 1.25rem row under every message for its hover actions (copy, reply, time),
+ * even while they are hidden. For these messages the row collapses, and on hover the actions
+ * appear at the right end of the tool row below, over the page background. Messages at the
+ * end of a turn keep their row.
+ */
+div[style*="gap"] > :has(> [class~="group/message"][class~="px-2"]):has(+ * [class~="group/timeline-row"])
+  > [class~="group/message"] > [class~="relative"][class~="h-5"] {
+  height: 0;
+}
+div[style*="gap"] > :has(> [class~="group/message"][class~="px-2"]):has(+ * [class~="group/timeline-row"])
+  > [class~="group/message"] > [class~="relative"][class~="h-5"] > [class~="absolute"] {
+  top: 8px;
+  left: auto;
+  right: 0;
+  margin-left: 0;
+  z-index: 1;
+  padding-left: 0.5rem;
+  background: var(--background);
+}
+div[style*="gap"] > :has(> [class~="group/message"][class~="px-2"]):has(+ * [class~="group/timeline-row"])
+  > [class~="group/message"]:not(:hover, :focus-within) > [class~="relative"][class~="h-5"] {
+  pointer-events: none;
+}
