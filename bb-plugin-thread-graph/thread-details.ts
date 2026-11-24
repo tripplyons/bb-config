@@ -3,7 +3,7 @@
 // still running. Both come from the thread's timeline. Tool calls are work
 // rows, not messages, so they never reach a preview.
 import { type PluginSidebarThread, useSdk } from "@get-bb/plugin-sdk/app";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { plainPreviewText } from "./graph-logic";
 
@@ -128,11 +128,36 @@ function runningSubagents(
   return running;
 }
 
-const cache = new Map<string, { updatedAt: number; fetchedAt: number; details: ThreadDetails }>();
+interface CacheEntry {
+  key: string;
+  fetchedAt: number;
+  details: ThreadDetails;
+}
+
+const cache = new Map<string, CacheEntry>();
 const inFlight = new Set<string>();
+const pending = new Map<string, PluginSidebarThread>();
+const listeners = new Set<() => void>();
+
+const notify = () => {
+  for (const listener of listeners) listener();
+};
 
 const isBusy = (thread: PluginSidebarThread) =>
   thread.status !== "idle" || thread.activity.backgroundAgents > 0;
+
+/** Changes whenever the thread's timeline may have a new final message or running state. */
+const threadKey = (thread: PluginSidebarThread) =>
+  `${thread.updatedAt}:${thread.latestAttentionAt}:${thread.status}:${thread.activity.backgroundAgents}`;
+
+function collectDetails(threads: readonly PluginSidebarThread[]): ReadonlyMap<string, ThreadDetails> {
+  const map = new Map<string, ThreadDetails>();
+  for (const thread of threads) {
+    const entry = cache.get(thread.id);
+    if (entry) map.set(thread.id, entry.details);
+  }
+  return map;
+}
 
 /**
  * Details for every given thread, refreshed when a thread updates and polled
@@ -142,25 +167,32 @@ export function useThreadDetails(
   threads: readonly PluginSidebarThread[],
 ): ReadonlyMap<string, ThreadDetails> {
   const sdk = useSdk();
-  const [snapshot, setSnapshot] = useState<ReadonlyMap<string, ThreadDetails>>(() => collect());
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const [snapshot, setSnapshot] = useState<ReadonlyMap<string, ThreadDetails>>(() =>
+    collectDetails(threads),
+  );
 
-  function collect() {
-    const map = new Map<string, ThreadDetails>();
-    for (const thread of threads) {
-      const entry = cache.get(thread.id);
-      if (entry) map.set(thread.id, entry.details);
-    }
-    return map;
-  }
+  // Subscribe once per mount so in-flight reads that finish after `threads`
+  // changes still push their cached result into this component's snapshot.
+  useEffect(() => {
+    const onUpdate = () => setSnapshot(collectDetails(threadsRef.current));
+    listeners.add(onUpdate);
+    return () => {
+      listeners.delete(onUpdate);
+    };
+  }, []);
 
   useEffect(() => {
-    // Reads are not aborted when the thread list changes, which it does often; a result
-    // that lands after this effect ends still fills the shared cache.
-    let cancelled = false;
-
     const refresh = (thread: PluginSidebarThread) => {
-      if (inFlight.has(thread.id)) return;
+      if (inFlight.has(thread.id)) {
+        // Queue the latest thread snapshot so a turn finishing mid-request is never dropped.
+        pending.set(thread.id, thread);
+        return;
+      }
+      const key = threadKey(thread);
       inFlight.add(thread.id);
+      let succeeded = false;
       sdk.threads
         .timeline({
           threadId: thread.id,
@@ -169,6 +201,7 @@ export function useThreadDetails(
         })
         .then(
           (timeline) => {
+            succeeded = true;
             const { rows: rawRows, activeThinking, activeBackgroundCommands } = timeline as {
               rows?: unknown;
               activeThinking?: { text?: unknown } | null;
@@ -179,7 +212,7 @@ export function useThreadDetails(
             const thinking =
               typeof activeThinking?.text === "string" ? previewOf(activeThinking.text) : null;
             cache.set(thread.id, {
-              updatedAt: thread.updatedAt,
+              key,
               fetchedAt: Date.now(),
               details: {
                 preview: thinking ?? latestAssistantText(rows),
@@ -189,22 +222,29 @@ export function useThreadDetails(
                 ),
               },
             });
-            if (!cancelled) setSnapshot(collect());
+            notify();
           },
           () => {
             // A failed read keeps the last details.
           },
         )
-        .finally(() => inFlight.delete(thread.id));
+        .finally(() => {
+          inFlight.delete(thread.id);
+          const queued = pending.get(thread.id);
+          if (!queued) return;
+          pending.delete(thread.id);
+          // Re-fetch immediately if the thread changed while this request was in flight.
+          if (succeeded || threadKey(queued) !== key) refresh(queued);
+        });
     };
 
     const sweep = () => {
       const now = Date.now();
-      for (const thread of threads) {
+      for (const thread of threadsRef.current) {
         const entry = cache.get(thread.id);
         const stale =
           !entry ||
-          entry.updatedAt !== thread.updatedAt ||
+          entry.key !== threadKey(thread) ||
           ((isBusy(thread) || entry.details.subagents.length > 0) &&
             now - entry.fetchedAt >= BUSY_POLL_MS);
         if (stale) refresh(thread);
@@ -212,14 +252,11 @@ export function useThreadDetails(
     };
 
     sweep();
-    setSnapshot(collect());
+    setSnapshot(collectDetails(threads));
     const timer = window.setInterval(sweep, BUSY_POLL_MS);
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
     };
-    // `threads` changes identity on every sidebar update, which is when a re-sweep is wanted.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sdk, threads]);
 
   return snapshot;
