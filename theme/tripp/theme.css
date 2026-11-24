@@ -24,3 +24,13 @@ html {
   --primary-foreground: #0c0c0c;
   --file-accent: #6f9de0;
 }
+
+/*
+ * Hide the "Thinking…" indicator at the end of a running thread. bb gives it no class or
+ * data attribute, so this matches its structure: the indicator's animated wrapper holds a
+ * flow-root div, and the thinking variant is a bare "mt-4" div inside it. The "Working..."
+ * variant carries more classes, so it still shows.
+ */
+div[style*="display: flow-root"] > div[class="mt-4"] {
+  display: none;
+}
