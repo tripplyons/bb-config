@@ -5,6 +5,7 @@ import {
   experimental_useSidebarThreads as useSidebarThreads,
   type BbNavigate,
   type PluginNavPanelProps,
+  type PluginSidebarThread,
   useBbNavigate,
 } from "@get-bb/plugin-sdk/app";
 import { useEffect, useMemo, type CSSProperties } from "react";
@@ -15,6 +16,15 @@ import { buildThreadGraph, DEFAULT_GRAPH_FORCES, GRAPH_FORCE_FIELDS, type GraphF
 import { graphActions, useGraphState } from "./graph-store";
 import { ThreadGraph, type GraphItem } from "./graph";
 import { useThreadDetails } from "./thread-details";
+
+/** A thread is working while a turn runs, a background agent runs, or it waits on the user. */
+const isWorking = (thread: PluginSidebarThread) =>
+  thread.status === "starting" ||
+  thread.status === "active" ||
+  thread.status === "stopping" ||
+  thread.activity.backgroundAgents > 0 ||
+  thread.hasPendingInteraction ||
+  thread.queuedWork === "waiting";
 
 const FORCE_LABEL: Record<GraphForceId, string> = {
   linkDistance: "Link distance",
@@ -94,10 +104,26 @@ function GraphPage(_props: PluginNavPanelProps) {
   );
   // Every project's threads show. Archived and hidden helper threads (such as
   // workflow workers) stay off the graph.
-  const visible = useMemo(
-    () => threads.filter((thread) => !thread.isArchived && !thread.isHidden),
-    [threads],
-  );
+  const visible = useMemo(() => {
+    const listed = threads.filter((thread) => !thread.isArchived && !thread.isHidden);
+    const byId = new Map(listed.map((thread) => [thread.id, thread]));
+    const isChild = (thread: PluginSidebarThread) =>
+      thread.parentThreadId !== null &&
+      thread.parentThreadId !== thread.id &&
+      byId.has(thread.parentThreadId);
+    // A child thread shows only while it works. An idle child with a working
+    // descendant also stays, so that descendant keeps its path to the root.
+    const kept = new Set<string>();
+    for (const thread of listed) {
+      if (!isChild(thread) || !isWorking(thread)) continue;
+      let current: PluginSidebarThread | undefined = thread;
+      while (current && isChild(current) && !kept.has(current.id)) {
+        kept.add(current.id);
+        current = byId.get(current.parentThreadId!);
+      }
+    }
+    return listed.filter((thread) => !isChild(thread) || kept.has(thread.id));
+  }, [threads]);
   const details = useThreadDetails(visible);
   const nodes = useMemo(() => {
     const items: GraphItem[] = [];

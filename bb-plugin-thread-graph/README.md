@@ -3,6 +3,7 @@
 A bb plugin that draws every active thread as a force-directed graph. It is a port of the thread graph in [tripplyons/t3code](https://github.com/tripplyons/t3code).
 
 - Each thread is a card. A child thread links to its parent.
+- A child thread shows only while it works: a turn or background agent runs, or it waits on you. An idle child stays only when a working thread descends from it.
 - Each subagent still running in a thread is a card with a robot icon, linked to that thread. Clicking it opens the thread.
 - A card shows the thread's latest assistant message or thinking. Tool calls never appear.
 - The graph shows threads from every project. Archived and hidden threads stay off it.
