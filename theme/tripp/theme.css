@@ -1,0 +1,26 @@
+/* Larger text: the app sizes text in rem, so this scales the whole UI. Default is 16px. */
+html {
+  font-size: 18px;
+}
+
+:root,
+.light {
+  /* Light mode: a dimmer gray surface instead of near-white. Neutrals are pure gray (R = G = B). */
+  --canvas: #d5d5d5;
+  --ink: #121212;
+  --primary: #2f5fa8;
+  --primary-foreground: #f4f4f4;
+  --muted-foreground: color-mix(in oklch, var(--ink) 72%, var(--canvas));
+  --subtle-foreground: color-mix(in oklch, var(--ink) 60%, var(--canvas));
+  --readback-foreground: color-mix(in oklch, var(--ink) 66%, var(--canvas));
+  --file-accent: #2f5fa8;
+}
+
+.dark {
+  /* Dark mode: near-black surface. Neutrals are pure gray (R = G = B). */
+  --canvas: #0c0c0c;
+  --ink: #d9d9d9;
+  --primary: #6f9de0;
+  --primary-foreground: #0c0c0c;
+  --file-accent: #6f9de0;
+}

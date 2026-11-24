@@ -1,0 +1,8 @@
+[
+  {
+    "id": "antigravity",
+    "displayName": "Google Antigravity",
+    "command": "/opt/homebrew/bin/agy",
+    "args": ["acp"]
+  }
+]
