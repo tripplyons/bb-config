@@ -133,16 +133,18 @@ const SAME_PROJECT_REPULSION = 0.3;
 const REPULSION_RANGE = 8;
 const VELOCITY_KEEP = 0.6;
 const ALPHA_DECAY = 0.03;
-const ALPHA_MIN = 0.003;
+export const ALPHA_MIN = 0.003;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
-interface SimNode {
+export interface SimNode {
   readonly key: string;
   readonly kind: ThreadGraphNodeKind;
   /** Index of the parent node, or -1 for a root thread. */
   readonly parent: number;
   /** Index of the root thread's project. */
   readonly project: number;
+  readonly parentKey: string | null;
+  readonly projectKey: string;
   readonly halfWidth: number;
   readonly halfHeight: number;
   degree: number;
@@ -158,46 +160,176 @@ export interface GraphSimulation {
   alpha: number;
 }
 
+export type GraphStructureNode = Pick<
+  ThreadGraphNode<unknown>,
+  "key" | "kind" | "parentKey" | "projectKey"
+>;
+
+/**
+ * Order-independent signature of the graph's node set, kinds, and parent/project
+ * links. Sidebar sort-order changes leave the signature unchanged.
+ */
+export function graphStructureSignature(nodes: readonly GraphStructureNode[]): string {
+  return nodes
+    .map((node) => `${node.key}:${node.kind}>${node.parentKey ?? ""}@${node.projectKey}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * Carries over live positions only for nodes that stayed in the graph with the
+ * same parent and project. Removed, returning, or re-parented/re-projected nodes
+ * start fresh around their new parent or project cluster instead of stale coordinates.
+ */
+export function retainGraphPositions(
+  previous: readonly Pick<SimNode, "key" | "parentKey" | "projectKey" | "x" | "y">[],
+  next: readonly GraphStructureNode[],
+): {
+  positions: Map<string, { x: number; y: number }>;
+  added: number;
+  removed: number;
+  carriedOver: number;
+} {
+  const prevByKey = new Map(previous.map((node) => [node.key, node]));
+  const nextKeys = new Set(next.map((node) => node.key));
+  const positions = new Map<string, { x: number; y: number }>();
+  let added = 0;
+  let carriedOver = 0;
+
+  for (const node of next) {
+    const prior = prevByKey.get(node.key);
+    if (prior && prior.parentKey === node.parentKey && prior.projectKey === node.projectKey) {
+      positions.set(node.key, { x: prior.x, y: prior.y });
+      carriedOver += 1;
+    } else {
+      added += 1;
+    }
+  }
+
+  let removed = 0;
+  for (const node of previous) {
+    if (!nextKeys.has(node.key)) removed += 1;
+  }
+
+  return { positions, added, removed, carriedOver };
+}
+
+/**
+ * Picks the simulation alpha after an update. Any change to the node set or
+ * parent/project structure reheats the layout so surviving nodes rebalance
+ * around removals, additions, and re-parenting instead of freezing in place.
+ */
+export function nextSimulationAlpha(options: {
+  first: boolean;
+  settleNow: boolean;
+  structureChanged: boolean;
+  forcesChanged: boolean;
+  heatBefore: number;
+}): number {
+  if (options.first || options.settleNow) return 1;
+  const heat = options.structureChanged ? 0.8 : options.forcesChanged ? 0.5 : 0;
+  return Math.max(options.heatBefore, heat);
+}
+
 /**
  * Lays nodes out in layout units. A node keeps its `previous` position; a new one starts on
- * a spiral around its parent or its project, so the same graph always settles the same way.
+ * a spiral around its parent or its project's current centroid, so the layout stays stable
+ * when nodes enter or leave.
  */
 export function createGraphSimulation(
-  graph: readonly Pick<ThreadGraphNode<unknown>, "key" | "kind" | "parentKey" | "projectKey">[],
+  graph: readonly GraphStructureNode[],
   previous: ReadonlyMap<string, { x: number; y: number }> = new Map(),
 ): GraphSimulation {
   const indexByKey = new Map(graph.map((node, index) => [node.key, index]));
   const projectIndex = new Map<string, number>();
-  const nodes: SimNode[] = [];
-  const childrenPlaced: number[] = [];
-  const rootsPlaced: number[] = [];
+  const projectOf: number[] = [];
+  const parentOf: number[] = [];
+
   for (const node of graph) {
     const parent = node.parentKey === null ? -1 : (indexByKey.get(node.parentKey) ?? -1);
     let project = projectIndex.get(node.projectKey);
     if (project === undefined) projectIndex.set(node.projectKey, (project = projectIndex.size));
+    parentOf.push(parent);
+    projectOf.push(project);
+  }
+
+  // First pass: measure existing root centroids per project and count already-placed
+  // siblings so newly added nodes spawn near their live cluster without stacking on
+  // existing cards, regardless of how the sidebar ordered `graph`.
+  const projectSumX = new Float64Array(projectIndex.size);
+  const projectSumY = new Float64Array(projectIndex.size);
+  const projectExistingRoots = new Uint32Array(projectIndex.size);
+  const childrenPlaced: number[] = [];
+  const rootsPlaced: number[] = [];
+
+  for (let i = 0; i < graph.length; i += 1) {
+    const node = graph[i]!;
+    const at = previous.get(node.key);
+    if (!at) continue;
+    const parent = parentOf[i]!;
+    const project = projectOf[i]!;
+    if (parent !== -1) {
+      childrenPlaced[parent] = (childrenPlaced[parent] ?? 0) + 1;
+    } else {
+      rootsPlaced[project] = (rootsPlaced[project] ?? 0) + 1;
+      projectSumX[project]! += at.x;
+      projectSumY[project]! += at.y;
+      projectExistingRoots[project]! += 1;
+    }
+  }
+
+  let existingProjectCount = 0;
+  for (let p = 0; p < projectIndex.size; p += 1) {
+    if (projectExistingRoots[p]! > 0) existingProjectCount += 1;
+  }
+  const newProjectSlot = new Map<number, number>();
+  let nextNewProjectSlot = existingProjectCount;
+
+  const nodes: SimNode[] = [];
+  for (let i = 0; i < graph.length; i += 1) {
+    const node = graph[i]!;
+    const parent = parentOf[i]!;
+    const project = projectOf[i]!;
     const size = GRAPH_NODE_SIZE[node.kind];
     const at = previous.get(node.key);
     let x = at?.x ?? 0;
     let y = at?.y ?? 0;
     const origin = nodes[parent];
-    const turn = origin ? (childrenPlaced[parent] ?? 0) : (rootsPlaced[project] ?? 0);
     if (!at) {
-      // Projects start apart on one spiral and their threads on a smaller one around each.
-      const projectRadius = 3 * Math.sqrt(project);
-      const originX = origin?.x ?? projectRadius * Math.cos(project * GOLDEN_ANGLE);
-      const originY = origin?.y ?? projectRadius * Math.sin(project * GOLDEN_ANGLE);
-      const radius = (origin ? 0.8 : 0) + 0.4 * Math.sqrt(turn);
+      const turn = origin ? (childrenPlaced[parent] ?? 0) : (rootsPlaced[project] ?? 0);
+      let originX: number;
+      let originY: number;
+      if (origin) {
+        originX = origin.x;
+        originY = origin.y;
+      } else if (projectExistingRoots[project]! > 0) {
+        originX = projectSumX[project]! / projectExistingRoots[project]!;
+        originY = projectSumY[project]! / projectExistingRoots[project]!;
+      } else {
+        let slot = newProjectSlot.get(project);
+        if (slot === undefined) {
+          slot = nextNewProjectSlot;
+          nextNewProjectSlot += 1;
+          newProjectSlot.set(project, slot);
+        }
+        const projectRadius = 3 * Math.sqrt(slot);
+        originX = projectRadius * Math.cos(slot * GOLDEN_ANGLE);
+        originY = projectRadius * Math.sin(slot * GOLDEN_ANGLE);
+      }
+      const radius = (origin || projectExistingRoots[project]! > 0 ? 0.8 : 0) + 0.4 * Math.sqrt(turn);
       const angle = turn * GOLDEN_ANGLE + parent;
       x = originX + radius * Math.cos(angle);
       y = originY + radius * Math.sin(angle);
+      if (origin) childrenPlaced[parent] = turn + 1;
+      else rootsPlaced[project] = turn + 1;
     }
-    if (origin) childrenPlaced[parent] = turn + 1;
-    else rootsPlaced[project] = turn + 1;
     nodes.push({
       key: node.key,
       kind: node.kind,
       parent,
       project,
+      parentKey: node.parentKey,
+      projectKey: node.projectKey,
       halfWidth: (size.width / 2 + NODE_GAP.x) / GRAPH_UNIT.x,
       halfHeight: (size.height / 2 + NODE_GAP.y) / GRAPH_UNIT.y,
       degree: 0,

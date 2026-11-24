@@ -16,10 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import {
+  ALPHA_MIN,
   createGraphSimulation,
   graphBounds,
   GRAPH_NODE_SIZE,
   GRAPH_UNIT,
+  graphStructureSignature,
+  nextSimulationAlpha,
+  retainGraphPositions,
   tickGraphSimulation,
   type GraphForces,
   type GraphSimulation,
@@ -69,8 +73,6 @@ const BATCH_SIZE = 8;
 // (pan and zoom) resets to fit the whole graph each time the page opens.
 const memory: {
   simulation: GraphSimulation | null;
-  /** Where each thread last sat, so one that leaves the graph and returns keeps its place. */
-  positions: Map<string, { x: number; y: number }>;
   signature: string;
   forces: GraphForces | null;
   view: GraphView | null;
@@ -78,7 +80,6 @@ const memory: {
   autoFit: boolean;
 } = {
   simulation: null,
-  positions: new Map(),
   signature: "",
   forces: null,
   view: null,
@@ -269,19 +270,19 @@ export function ThreadGraph(props: {
   };
 
   const layout = useLatest((nodes: readonly GraphNode[], forces: GraphForces) => {
-    const signature = nodes
-      .map((node) => `${node.key}>${node.parentKey ?? ""}@${node.projectKey}`)
-      .join("|");
+    const signature = graphStructureSignature(nodes);
     const structureChanged = signature !== memory.signature;
     const forcesChanged = memory.forces !== forces;
     const first = memory.simulation === null;
     // A rebuilt simulation starts hot; it takes over the heat of the one it replaces instead.
     const heatBefore = memory.simulation?.alpha ?? 0;
-    let added = 0;
+    let changed = 0;
+    let carriedOver = nodes.length;
     if (structureChanged) {
-      for (const node of memory.simulation?.nodes ?? []) memory.positions.set(node.key, node);
-      for (const node of nodes) if (!memory.positions.has(node.key)) added += 1;
-      memory.simulation = createGraphSimulation(nodes, memory.positions);
+      const retained = retainGraphPositions(memory.simulation?.nodes ?? [], nodes);
+      changed = retained.added + retained.removed;
+      carriedOver = retained.carriedOver;
+      memory.simulation = createGraphSimulation(nodes, retained.positions);
       memory.signature = signature;
     }
     memory.forces = forces;
@@ -290,15 +291,16 @@ export function ThreadGraph(props: {
     // Status and title updates re-render the cards without moving them.
     if (painted.current && !structureChanged && !forcesChanged) return;
     painted.current = true;
-    // A first layout or a batch of new threads settles before paint, so the graph never flies
-    // in from a tangle. Smaller changes animate into place.
-    const settleNow = first || added > BATCH_SIZE;
-    if (!first) {
-      // Threads that leave or return to known places only need overlaps parted, not a new layout.
-      const heat =
-        forcesChanged || settleNow ? 0.5 : added > 0 ? 0.3 : structureChanged ? 0.004 : 0;
-      simulation.alpha = Math.max(heatBefore, heat);
-    }
+    // A first layout, a disjoint node set, or a large batch settles before paint so the graph
+    // never flies in from a tangle. Smaller changes animate into their newly balanced layout.
+    const settleNow = first || carriedOver === 0 || changed > BATCH_SIZE;
+    simulation.alpha = nextSimulationAlpha({
+      first,
+      settleNow,
+      structureChanged,
+      forcesChanged,
+      heatBefore,
+    });
     if (settleNow) while (tickGraphSimulation(simulation, forces));
     paint();
     if (memory.view === null || memory.autoFit) fitView();
@@ -312,7 +314,7 @@ export function ThreadGraph(props: {
       if (memory.autoFit) fitView();
       if (moving) frame.current = requestAnimationFrame(step);
     };
-    if (!settleNow) frame.current = requestAnimationFrame(step);
+    if (!settleNow && simulation.alpha >= ALPHA_MIN) frame.current = requestAnimationFrame(step);
   });
   // The layout lives outside React: card positions are written to the DOM as the simulation steps.
   useLayoutEffect(() => layout(props.nodes, props.forces), [layout, props.nodes, props.forces]);
