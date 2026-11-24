@@ -63,7 +63,13 @@ div[style*="display: flow-root"] > div.mt-4.px-2 {
   display: none;
 }
 
-/* Remove the shadow the message box casts upward onto the transcript. */
+/*
+ * Remove the shadow above the message box: the box's own drop shadow, and the 1.5rem fade
+ * from the transcript into the background just above it.
+ */
 form.shadow-lift {
   box-shadow: none;
+}
+div.pointer-events-none.absolute.-top-6.bg-gradient-to-b.to-background {
+  display: none;
 }
