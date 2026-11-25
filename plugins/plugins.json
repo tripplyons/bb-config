@@ -15,6 +15,10 @@
     "source": "path:/Users/tripp/projects/bb-config/bb-plugin-auto-collapse-composer",
     "enabled": true
   },
+  "auto-sidebar": {
+    "source": "path:/Users/tripp/projects/bb-config/bb-plugin-auto-sidebar",
+    "enabled": true
+  },
   "automations": {
     "source": "builtin:automations",
     "enabled": true

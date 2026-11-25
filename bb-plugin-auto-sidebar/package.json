@@ -1,0 +1,42 @@
+{
+  "name": "bb-plugin-auto-sidebar",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Replaces the sidebar thread list with automatic Working, Active, and Archived sections.",
+  "engines": {
+    "bb": ">=0.50",
+    "bbPluginSdk": ">=0.6.157"
+  },
+  "bb": {
+    "name": "Auto Sidebar",
+    "description": "Organizes the sidebar automatically into Working, Active, and Archived sections with no manual folders.",
+    "branding": {
+      "icon": "Layers"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "skills": []
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "build": "bb plugin build"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.157",
+    "@testing-library/react": "^16.0.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "clsx": "^2.1.1",
+    "hono": "^4.11.9",
+    "jsdom": "^26.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.7.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.1"
+  }
+}
