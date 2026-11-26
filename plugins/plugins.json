@@ -71,6 +71,10 @@
     "source": "builtin:bb-guide",
     "enabled": true
   },
+  "blackboard": {
+    "source": "path:/Users/tripp/projects/bb-config/bb-plugin-blackboard",
+    "enabled": true
+  },
   "browser-automation": {
     "source": "builtin:browser-automation",
     "enabled": true
