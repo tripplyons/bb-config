@@ -13,7 +13,8 @@
     "branding": {
       "icon": "Network"
     },
-    "server": "./server.ts"
+    "server": "./server.ts",
+    "app": "./app.tsx"
   },
   "scripts": {
     "typecheck": "tsc",
@@ -25,11 +26,17 @@
   },
   "devDependencies": {
     "@get-bb/plugin-sdk": "0.6.157",
+    "@testing-library/react": "^16.3.3",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
     "better-sqlite3": "^12.0.0",
     "cron-parser": "^5.10.7",
     "hono": "^4.13.22",
+    "jsdom": "^26.1.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^5.7.0",
     "vitest": "^3.1.1"
   }

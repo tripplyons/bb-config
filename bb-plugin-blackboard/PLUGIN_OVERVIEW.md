@@ -20,6 +20,10 @@ reviewer passes every criterion.
 - Lessons from finished runs. You adopt them, and later runs in the same
   project see them.
 - A list of the skills, tools, and access that workers needed and did not have.
+- A Board tab in each run thread's side panel that shows goals, intents,
+  reviews, questions, and recent facts, and updates as the run works.
+- Steering through chat: ask the planner thread to change goals, clean up
+  child threads, or adopt and retire lessons.
 - A `bb blackboard` command to start runs, read boards, add guidance, goals,
   and constraints, answer questions, cancel runs, archive their threads, and
   review lessons and gaps.

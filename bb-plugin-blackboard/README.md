@@ -79,6 +79,28 @@ Patches live in the plugin's SQLite database. Git runs asynchronously so it
 never blocks the bb server. If the checkout is not a git repository, workers
 share it and nothing moves.
 
+## The Board tab
+
+A planner, worker, or reviewer thread shows a Board tab in its side panel. The
+tab reads the run that the thread belongs to and shows:
+
+- the run's status, cycle, intent budget, workspace mode, and baseline
+- each goal, with the reason the planner gave when it proved it
+- open questions, which you answer in the planner thread
+- intents grouped as live, unmerged, done, and ended, with their paths,
+  integration errors, failed smoke checks, and a link to each thread
+- reviews with one check per goal and the commands the reviewer ran
+- guidance, planner fixes, constraints, the planner's todo list, and the 40
+  newest facts
+
+In a worker or reviewer thread, the tab marks that thread's own intent or
+review. The tab is read-only. To change a run, talk to its planner thread. The
+planner archives the run's child threads with `blackboard_cleanup`, and lists,
+adopts, or retires lessons with `blackboard_lessons`, but only when you ask.
+
+The tab reads the board through the plugin's `board` RPC method. Each board
+write invalidates that read, so the tab updates while the run works.
+
 ## Ideas taken from ARTEX
 
 - The planner dispatches only for directions that no live intent covers, and
@@ -115,10 +137,14 @@ share it and nothing moves.
 - `prompts.ts`: the overview renderer and the planner, worker, and reviewer
   instructions and briefs.
 - `server.ts`: settings, role resolution, agent tools, the dispatcher, thread
-  events, and the `bb blackboard` CLI.
+  events, the `board` RPC method, and the `bb blackboard` CLI.
+- `rpc.ts`: the RPC contract and board view types that the server and the app
+  share.
+- `app.tsx`: the Board tab.
 - `skills/blackboard/SKILL.md`: how agents prepare, start, and steer runs.
 - `server.test.ts`: end-to-end tests on bb's fake plugin host, with real git
   worktrees in temporary directories.
+- `app.test.tsx`: render tests for the Board tab with a fake RPC handler.
 
 ## Build and install
 

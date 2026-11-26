@@ -8,6 +8,7 @@ import {
   makePluginAgentConfigurationContext,
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
+import type { BoardView } from "./rpc.js";
 import plugin, { PLANNER_TOOLS, REVIEWER_TOOLS, START_TOOLS, WORKER_TOOLS } from "./server.js";
 
 type Spawn = {
@@ -285,6 +286,9 @@ describe("blackboard in a shared checkout", () => {
     // No dispatch while a review is live.
     expect(isError(await t.call("blackboard_dispatch", { intents: [{ summary: "More" }] }, planner))).toBe(true);
     await t.call("blackboard_begin", {}, reviewer);
+    const reviewView = (await t.harness.behavior.callRpc("board", { threadId: reviewer })) as BoardView;
+    expect(reviewView.role).toBe("reviewer");
+    expect(reviewView.nodes.find((n) => n.id === reviewView.nodeId)!.kind).toBe("review");
 
     const intent = intentId(text(await t.call("blackboard_overview", {}, planner)), "Enable incremental");
     // A behavior pass needs a command that exited 0.
@@ -319,14 +323,64 @@ describe("blackboard in a shared checkout", () => {
     expect(finished).toMatch(/finished as complete/);
     expect(finished).toMatch(/candidate/);
 
+    // Child threads stay until the user asks the planner to clean up.
+    expect(t.archived).toEqual([]);
+    expect(text(await t.call("blackboard_cleanup", {}, planner))).toMatch(/Archived 2 child threads/);
+    expect(t.archived.sort()).toEqual(["thr_2", "thr_3"]);
+
     // Candidate lessons stay hidden until the user adopts them.
     const second = await startRun(t);
     expect((await t.configure(second)).instructions).not.toContain("measure type checking first");
+    expect(isError(await t.call("blackboard_cleanup", {}, second))).toBe(true);
+    const listed = text(await t.call("blackboard_lessons", { action: "list" }, second));
+    expect(listed).toContain("measure type checking first");
+    const lessonId = Number(/^(\d+) \[candidate/m.exec(listed)![1]);
+    expect(isError(await t.call("blackboard_lessons", { action: "adopt", lessonId }, second))).toBe(true);
     const lessons = await t.harness.behavior.runCli(["lessons", "--project", "proj_1"], {});
-    const lessonId = /^(\d+)/m.exec(lessons.stdout)![1]!;
-    await t.harness.behavior.runCli(["lessons", "adopt", lessonId], {});
+    expect(lessons.stdout).toMatch(new RegExp(`^${lessonId}\\b`, "m"));
+    expect(text(await t.call("blackboard_lessons", { action: "adopt", lessonId, fromUser: true }, second))).toMatch(/adopted/);
     const third = await startRun(t);
     expect((await t.configure(third)).instructions).toContain("measure type checking first");
+    await t.harness.behavior.runCli(["lessons", "retire", String(lessonId)], {});
+    const fourth = await startRun(t);
+    expect((await t.configure(fourth)).instructions).not.toContain("measure type checking first");
+  });
+
+  it("serves each run thread's board over RPC and refreshes it on writes", async () => {
+    const t = await setup();
+    const planner = await startRun(t);
+    expect(await t.harness.behavior.callRpc("board", { threadId: "thr_origin" })).toBeNull();
+    expect(await t.harness.behavior.callRpc("board", { threadId: "thr_unknown" })).toBeNull();
+
+    await new Promise((r) => setTimeout(r, 80));
+    const before = t.harness.inspection.experimental_rpcInvalidations.length;
+    await t.call("blackboard_set_goals", { add: ["Build under 10s"] }, planner);
+    await t.call("blackboard_dispatch", { intents: [{ summary: "Enable incremental builds", writes: ["src"] }] }, planner);
+    await new Promise((r) => setTimeout(r, 80));
+    const batches = t.harness.inspection.experimental_rpcInvalidations.slice(before);
+    // Writes close together collapse into one refresh.
+    expect(batches).toEqual([["run:r1", "membership"]]);
+
+    const view = (await t.harness.behavior.callRpc("board", { threadId: planner })) as BoardView;
+    expect(view.role).toBe("planner");
+    expect(view.nodeId).toBeNull();
+    expect(view.run).toMatchObject({ id: "r1", status: "running", plannerThreadId: planner });
+    expect(view.nodes.map((n) => n.kind)).toEqual(["goal", "intent"]);
+
+    const worker = "thr_2";
+    const workerView = (await t.harness.behavior.callRpc("board", { threadId: worker })) as BoardView;
+    expect(workerView.role).toBe("worker");
+    expect(workerView.nodeId).toBe(view.nodes[1]!.id);
+
+    await t.call("blackboard_record_fact", { facts: [observed("Build takes 6.2s")] }, worker);
+    await t.call("blackboard_finish_intent", { status: "done", summary: "6.2s", output: "A long trace." }, worker);
+    const after = (await t.harness.behavior.callRpc("board", { threadId: planner })) as BoardView;
+    expect(after.factCount).toBe(1);
+    expect(after.facts[0]!.summary).toBe("Build takes 6.2s");
+    const done = after.nodes.find((n) => n.kind === "intent")!;
+    expect(done.status).toBe("done");
+    expect(done.data.output).toBeUndefined();
+    expect(JSON.stringify(after)).not.toContain("A long trace.");
   });
 
   it("reopens failed goals on revise and flags goals that fail twice", async () => {

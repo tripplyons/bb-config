@@ -28,6 +28,7 @@ import {
   oneLine,
 } from "./board.js";
 import * as git from "./git.js";
+import { FACT_LIMIT, rpcContract, type BoardView, type NodeView } from "./rpc.js";
 import {
   DATA_NOTICE,
   START_INSTRUCTIONS,
@@ -66,6 +67,8 @@ export const PLANNER_TOOLS = [
   "blackboard_record_fix",
   "blackboard_request_review",
   "blackboard_finish_run",
+  "blackboard_cleanup",
+  "blackboard_lessons",
 ] as const;
 export const WORKER_TOOLS = [
   ...READ_TOOLS,
@@ -282,6 +285,22 @@ export default async function plugin(bb: BbPluginApi) {
   db.pragma("foreign_keys = ON");
   bb.storage.migrate(db, MIGRATIONS);
   const board = new Board(db);
+
+  // ------------------------------------------------------------ live board view
+
+  // Board writes come from tools, events, the CLI, and background smoke
+  // checks. Collect the runs they touch and refresh the app's reads once.
+  const touched = new Set<string>();
+  let flush: ReturnType<typeof setTimeout> | null = null;
+  board.onChange = (runId) => {
+    touched.add(runId);
+    flush ??= setTimeout(() => {
+      flush = null;
+      const tags = [...touched].map((id) => `run:${id}`);
+      touched.clear();
+      bb.rpc.experimental_invalidate([...tags, "membership"]);
+    }, 50);
+  };
 
   // ------------------------------------------------------------ role resolution
 
@@ -668,6 +687,33 @@ export default async function plugin(bb: BbPluginApi) {
     return stopped;
   }
 
+  function childThreads(run: Run): Array<{ node: BoardNode; threadId: string }> {
+    return [...board.listNodes(run.id, "intent"), ...board.listNodes(run.id, "review")]
+      .filter((n) => n.threadId)
+      .map((node) => ({ node, threadId: node.threadId! }));
+  }
+
+  /** Archives a finished run's child threads, which retires their managed worktrees. */
+  async function archiveChildren(run: Run): Promise<{ archived: number; failed: string[] }> {
+    if (!FINISHED_RUN.includes(run.status)) throw new BoardError(`run ${run.id} is still running. Finish or cancel it first.`);
+    let archived = 0;
+    const failed: string[] = [];
+    for (const { threadId } of childThreads(run)) {
+      try {
+        await bb.sdk.threads.archive({ threadId });
+        archived += 1;
+      } catch (error) {
+        failed.push(`${threadId}: ${message(error)}`);
+      }
+    }
+    return { archived, failed };
+  }
+
+  function archiveReport({ archived, failed }: { archived: number; failed: string[] }): string {
+    const failures = failed.length ? `\nFailed:\n${failed.join("\n")}` : "";
+    return `Archived ${archived} child thread${archived === 1 ? "" : "s"}. bb retires their worktrees after its grace period.${failures}`;
+  }
+
   // ------------------------------------------------------------ start
 
   async function startRun(input: StartInput, ctx: { threadId?: string; projectId?: string }): Promise<{ run: Run; plannerThreadId: string }> {
@@ -730,6 +776,80 @@ export default async function plugin(bb: BbPluginApi) {
       throw error;
     }
   }
+
+  // ------------------------------------------------------------ RPC
+
+  function nodeView(node: BoardNode): NodeView {
+    // A worker's full output can be 40 KB; the panel links to its thread instead.
+    const { output: _output, ...data } = node.data;
+    return {
+      id: node.id,
+      kind: node.kind,
+      status: node.status,
+      summary: node.summary,
+      detail: node.detail,
+      data,
+      origin: node.origin,
+      threadId: node.threadId,
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+    };
+  }
+
+  function boardViewFor(role: Role): BoardView {
+    const run = board.requireRun(role.run.id);
+    const kinds = ["goal", "constraint", "intent", "hint", "question", "review", "fix"] as const;
+    const nodes = kinds.flatMap((k) => board.listNodes(run.id, k)).sort((a, b) => a.id - b.id);
+    const target = (t: Target) => ({ provider: t.provider, model: t.model, reasoningLevel: t.reasoningLevel });
+    return {
+      role: role.role,
+      nodeId: role.role === "worker" ? role.intent.id : role.role === "reviewer" ? role.review.id : null,
+      run: {
+        id: run.id,
+        title: run.title,
+        request: run.request,
+        status: run.status,
+        summary: run.summary,
+        cycle: run.cycle,
+        plannerThreadId: run.plannerThreadId,
+        baselineCommit: run.baselineCommit,
+        context: run.context,
+        todo: run.todo,
+        deadlineAt: run.deadlineAt,
+        createdAt: run.createdAt,
+        finishedAt: run.finishedAt,
+        settings: {
+          parallel: run.settings.parallel,
+          maxIntents: run.settings.maxIntents,
+          workspace: run.settings.workspace,
+          checks: run.settings.checks,
+          review: run.settings.review,
+          setup: run.settings.setup,
+          smokeCheck: run.settings.smokeCheck,
+          workers: run.settings.workers.map(target),
+          reviewer: target(run.settings.reviewer),
+        },
+      },
+      nodes: nodes.map(nodeView),
+      facts: board.listNodes(run.id, "fact", { order: "desc", limit: FACT_LIMIT }).map(nodeView),
+      factCount: board.countNodes(run.id, "fact"),
+    };
+  }
+
+  bb.rpc.register(rpcContract, {
+    async board({ threadId }) {
+      // Read-only: unlike resolveRole, this never binds a thread to the board.
+      let role = roleFromDb(threadId);
+      if (!role) {
+        try {
+          role = roleFromMetadata(threadId, await bb.sdk.threads.getPluginMetadata({ threadId }));
+        } catch {
+          role = null;
+        }
+      }
+      return role ? boardViewFor(role) : null;
+    },
+  });
 
   // ------------------------------------------------------------ agent configuration
 
@@ -1240,8 +1360,47 @@ export default async function plugin(bb: BbPluginApi) {
           `Lessons recorded: ${lessons.map((l) => `${l.id} (${l.status})`).join(", ")}. The user adopts lessons with \`bb blackboard lessons adopt <id>\`; later runs see only adopted lessons by default.`,
         );
       }
-      lines.push(`Now give the user the final report. Child threads and worktrees stay until the user runs \`bb blackboard cleanup ${run.id}\`.`);
+      lines.push(`Now give the user the final report. Child threads and worktrees stay until the user asks you to clean them up (blackboard_cleanup).`);
       return lines.join("\n");
+    },
+  });
+
+  tool({
+    name: "blackboard_cleanup",
+    description:
+      "Archive a finished run's worker and reviewer threads, which retires their worktrees. Use only when the user asks; the run must be finished first.",
+    labels: ["Cleaning up the run", "Cleaned up the run"],
+    parameters: z.object({}),
+    async execute(_params, ctx) {
+      const run = await requirePlanner(ctx.threadId);
+      return archiveReport(await archiveChildren(run));
+    },
+  });
+
+  tool({
+    name: "blackboard_lessons",
+    description:
+      "List this project's lessons, or adopt or retire one. Adopted lessons reach later runs. Adopt or retire only when the user asks in this conversation, and set fromUser; never adopt a lesson on your own judgment.",
+    labels: ["Updating lessons", "Updated lessons"],
+    parameters: z.object({
+      action: z.enum(["list", "adopt", "retire"]),
+      lessonId: z.number().int().positive().optional().describe("Required for adopt and retire."),
+      fromUser: z.boolean().optional().describe("Must be true for adopt and retire: the user asked for this change."),
+    }),
+    async execute(params, ctx) {
+      const run = await requirePlanner(ctx.threadId);
+      if (params.action === "list") {
+        const lessons = board.listLessons({ projectId: run.projectId, statuses: ["candidate", "adopted"] });
+        if (!lessons.length) return "No lessons in this project.";
+        return lessons.map((l) => `${l.id} [${l.status}, ${l.kind}, ${l.support} run${l.support === 1 ? "" : "s"}] When ${l.cue}: ${l.action}`).join("\n");
+      }
+      if (params.fromUser !== true) throw new BoardError("only the user can adopt or retire a lesson. Ask them, and pass fromUser: true once they say so.");
+      if (!params.lessonId) throw new BoardError("pass lessonId");
+      const lesson = board.requireLesson(params.lessonId);
+      if (lesson.projectId !== run.projectId) throw new BoardError(`lesson ${lesson.id} belongs to another project`);
+      const status = params.action === "adopt" ? "adopted" : "retired";
+      board.setLessonStatus(lesson.id, status);
+      return `Lesson ${lesson.id} ${status}.`;
     },
   });
 
@@ -1618,12 +1777,6 @@ export default async function plugin(bb: BbPluginApi) {
       });
   }
 
-  function childThreads(run: Run): Array<{ node: BoardNode; threadId: string }> {
-    return [...board.listNodes(run.id, "intent"), ...board.listNodes(run.id, "review")]
-      .filter((n) => n.threadId)
-      .map((node) => ({ node, threadId: node.threadId! }));
-  }
-
   const json = { type: "boolean", description: "Print JSON." } as const;
 
   bb.cli.register(
@@ -1888,18 +2041,7 @@ export default async function plugin(bb: BbPluginApi) {
                   hint: `Finish or cancel it first: bb blackboard cancel ${run.id}`,
                 });
               }
-              let archived = 0;
-              const failed: string[] = [];
-              for (const { threadId } of childThreads(run)) {
-                try {
-                  await bb.sdk.threads.archive({ threadId });
-                  archived += 1;
-                } catch (error) {
-                  failed.push(`${threadId}: ${message(error)}`);
-                }
-              }
-              const failures = failed.length ? `\nFailed:\n${failed.join("\n")}` : "";
-              return out(`Archived ${archived} child thread${archived === 1 ? "" : "s"}. bb retires their worktrees after its grace period.${failures}`);
+              return out(archiveReport(await archiveChildren(run)));
             });
           },
         }),

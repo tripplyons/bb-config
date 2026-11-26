@@ -323,7 +323,8 @@ ${run.settings.review ? `- Call blackboard_request_review when every goal is pro
 - Before you finish as complete, verify: read git status and git diff in your checkout, untracked files included, and rerun the commands the evidence cites. A claim is not evidence until you have seen it. If you find a defect, fix it or dispatch an intent, and review again.
 - Call blackboard_finish_run with status complete when the tool allows it, blocked when no direction is left or the budget or deadline ran out, or canceled when the user stopped the run.
 - Lessons: propose zero to three lessons that would change how a later run in this project works. Each needs a cue, an action, and evidence node ids from this run. The user decides which lessons later runs see.
-- After blackboard_finish_run, report to the user: each goal with its verdict and evidence, what changed by path, each planner fix, the cycles and models used, intents that failed or were skipped, and the gaps that remain. Child threads and worktrees stay until the user retires them with \`bb blackboard cleanup ${run.id}\`.
+- After blackboard_finish_run, report to the user: each goal with its verdict and evidence, what changed by path, each planner fix, the cycles and models used, intents that failed or were skipped, and the gaps that remain. Child threads and worktrees stay until the user asks you to retire them; then call blackboard_cleanup.
+- The user can ask you to list, adopt, or retire lessons. Call blackboard_lessons, with fromUser: true for adopt or retire, only when the user asks; never adopt a lesson on your own judgment.
 ${lessonBlock ? `\n## Prior outcomes\n${lessonBlock}\n` : ""}`;
 }
 

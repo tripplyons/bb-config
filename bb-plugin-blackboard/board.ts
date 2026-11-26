@@ -420,10 +420,17 @@ export interface FactResult {
 // ---------------------------------------------------------------- board
 
 export class Board {
+  /** Called with a run's id after any write to that run or its nodes. */
+  onChange: ((runId: string) => void) | null = null;
+
   constructor(
     private readonly db: Database.Database,
     private readonly now: () => number = () => Date.now(),
   ) {}
+
+  private changed(runId: string): void {
+    this.onChange?.(runId);
+  }
 
   // ------------------------------------------------------------ runs
 
@@ -463,6 +470,7 @@ export class Board {
         t,
         t,
       );
+    this.changed(id);
     return this.requireRun(id);
   }
 
@@ -533,6 +541,7 @@ export class Board {
     sets.push(`updated_at = ?`);
     args.push(this.now(), id);
     this.db.prepare(`UPDATE runs SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+    this.changed(id);
     return this.requireRun(id);
   }
 
@@ -576,6 +585,7 @@ export class Board {
       );
     const id = Number(info.lastInsertRowid);
     for (const parent of input.parents ?? []) this.addEdge(parent.id, id, parent.rel);
+    this.changed(input.runId);
     return this.requireNode(id);
   }
 
@@ -614,6 +624,7 @@ export class Board {
         this.now(),
         id,
       );
+    this.changed(current.runId);
     return this.requireNode(id);
   }
 

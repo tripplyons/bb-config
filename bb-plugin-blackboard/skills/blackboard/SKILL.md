@@ -85,8 +85,13 @@ fields above. `--skip-review` lets the planner complete without a reviewer.
 
 ## Steer a run as the user
 
-Talk to the planner thread directly, or use the CLI. Each of these commands
-records the change and tells the planner:
+Talk to the planner thread directly, or use the CLI. The planner can add
+guidance, goals, and constraints, answer questions, and stop workers. After the
+run finishes, it archives the child threads with `blackboard_cleanup` when the
+user asks. It lists lessons with `blackboard_lessons`, and adopts or retires one
+with `fromUser: true` only on the user's request.
+
+Each of these commands records the change and tells the planner:
 
 | Command | Effect |
 | --- | --- |
@@ -101,6 +106,10 @@ When two reviews in a row fail the same goal, the planner stops and asks the
 user whether to continue, change the goal, or stop.
 
 ## Read a run
+
+Each planner, worker, and reviewer thread has a Board tab in its side panel. It
+shows the run's goals, intents, reviews, questions, guidance, and newest facts,
+and updates as the board changes. It is read-only.
 
 | Command | Output |
 | --- | --- |
