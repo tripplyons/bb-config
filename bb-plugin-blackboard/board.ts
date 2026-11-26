@@ -95,6 +95,16 @@ export const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX gaps_project ON gaps(project_id, capability_key)`,
+  `ALTER TABLE runs ADD COLUMN cycle INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE runs ADD COLUMN baseline_commit TEXT`,
+  `ALTER TABLE runs ADD COLUMN context TEXT`,
+  `CREATE TABLE patches (
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    content BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (run_id, name)
+  )`,
 ];
 
 // ---------------------------------------------------------------- types
@@ -102,15 +112,42 @@ export const MIGRATIONS: string[] = [
 export type RunStatus = "running" | "complete" | "blocked" | "canceled";
 export const FINISHED_RUN: readonly RunStatus[] = ["complete", "blocked", "canceled"];
 
-export type WorkspaceMode = "shared" | "worktree";
+/**
+ * worktree: each worker and reviewer gets a managed worktree at the baseline
+ * commit, and patches carry work both ways. shared: workers edit the planner's
+ * checkout directly; used only when the checkout is not a git repository.
+ * pending: the plugin has not looked at the checkout yet.
+ */
+export type WorkspaceMode = "pending" | "shared" | "worktree";
+
+/** How many check intents a cycle may have, as in Altex. */
+export type CheckMode = "review" | "once" | "thorough";
+
+/** A provider and model for a worker or the reviewer. Null fields inherit. */
+export interface Target {
+  provider: string | null;
+  model: string | null;
+  reasoningLevel: string | null;
+  serviceTier: string | null;
+  sessionOptions: Record<string, string | boolean> | null;
+}
 
 export interface RunSettings {
   parallel: number;
   maxIntents: number;
   workspace: WorkspaceMode;
-  workerProvider: string | null;
-  workerModel: string | null;
-  workerReasoning: string | null;
+  checks: CheckMode;
+  /** When true, a run completes only after a reviewer passes every goal. */
+  review: boolean;
+  setup: string | null;
+  smokeCheck: string | null;
+  /** Absolute paths of files the work must use. */
+  sources: string[];
+  /** Absolute paths of git-ignored files that worktrees do not have. */
+  inputs: string[];
+  /** Worker targets; intents rotate through them in dispatch order. */
+  workers: Target[];
+  reviewer: Target;
   workerVisibility: "visible" | "hidden";
 }
 
@@ -134,12 +171,16 @@ export interface Run {
   summary: string | null;
   nudgeFingerprint: string | null;
   deadlineAt: number | null;
+  cycle: number;
+  baselineCommit: string | null;
+  /** Instructions every intent's brief carries once. */
+  context: string | null;
   createdAt: number;
   updatedAt: number;
   finishedAt: number | null;
 }
 
-export type NodeKind = "goal" | "constraint" | "intent" | "fact" | "hint" | "question";
+export type NodeKind = "goal" | "constraint" | "intent" | "fact" | "hint" | "question" | "review" | "fix";
 
 export type IntentStatus =
   | "queued"
@@ -149,7 +190,9 @@ export type IntentStatus =
   | "blocked"
   | "exhausted"
   | "stopped"
-  | "skipped";
+  | "skipped"
+  // Finished, but its patch is not in the checkout yet.
+  | "unmerged";
 export const LIVE_INTENT: readonly IntentStatus[] = ["queued", "running", "waiting"];
 export const SETTLED_INTENT: readonly IntentStatus[] = [
   "done",
@@ -243,11 +286,14 @@ function toRun(row: Row): Run {
     title: String(row.title),
     request: String(row.request),
     status: row.status as RunStatus,
-    settings: parseJson<RunSettings>(row.settings, defaultRunSettings()),
+    settings: { ...defaultRunSettings(), ...parseJson<Partial<RunSettings>>(row.settings, {}) },
     todo: parseJson<TodoItem[]>(row.todo, []),
     summary: (row.summary as string | null) ?? null,
     nudgeFingerprint: (row.nudge_fingerprint as string | null) ?? null,
     deadlineAt: (row.deadline_at as number | null) ?? null,
+    cycle: Number(row.cycle ?? 1),
+    baselineCommit: (row.baseline_commit as string | null) ?? null,
+    context: (row.context as string | null) ?? null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     finishedAt: (row.finished_at as number | null) ?? null,
@@ -270,16 +316,52 @@ function toNode(row: Row): BoardNode {
   };
 }
 
+export function emptyTarget(): Target {
+  return { provider: null, model: null, reasoningLevel: null, serviceTier: null, sessionOptions: null };
+}
+
 export function defaultRunSettings(): RunSettings {
   return {
     parallel: 3,
     maxIntents: 30,
-    workspace: "shared",
-    workerProvider: null,
-    workerModel: null,
-    workerReasoning: null,
+    workspace: "pending",
+    checks: "once",
+    review: true,
+    setup: null,
+    smokeCheck: null,
+    sources: [],
+    inputs: [],
+    workers: [emptyTarget()],
+    reviewer: emptyTarget(),
     workerVisibility: "visible",
   };
+}
+
+export function describeTarget(target: Target): string {
+  const parts = [target.provider ?? "planner's provider", target.model ?? "default model"];
+  if (target.reasoningLevel) parts.push(`reasoning ${target.reasoningLevel}`);
+  return parts.join(" / ");
+}
+
+/** Words that make an intent a check intent whatever its flag says. */
+const CHECK_WORDS = /^\s*(verify|check|validate|audit|confirm|double-check|re-check|recheck|cross-check)\b/i;
+
+export function isCheckIntent(summary: string, flag: boolean | undefined): boolean {
+  return Boolean(flag) || CHECK_WORDS.test(summary);
+}
+
+/** Normalizes a repository-relative path; refuses absolute and parent paths. */
+export function normalizeWritePath(path: string): string {
+  const clean = path.trim().replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  if (!clean || clean === ".") throw new BoardError(`a writes entry is empty; name files or directories relative to the repository root`);
+  if (clean.startsWith("/") || /^[a-zA-Z]:/.test(clean)) throw new BoardError(`writes entry "${path}" is absolute; use a path relative to the repository root`);
+  if (clean.split("/").includes("..")) throw new BoardError(`writes entry "${path}" leaves the repository`);
+  return clean;
+}
+
+function overlaps(a: readonly string[], b: readonly string[]): boolean {
+  const inside = (p: string, d: string) => p === d || p.startsWith(`${d}/`);
+  return a.some((x) => b.some((y) => inside(x, y) || inside(y, x)));
 }
 
 // ---------------------------------------------------------------- inputs
@@ -292,6 +374,25 @@ export interface IntentSpec {
   dependsOn?: Array<number | string>;
   check?: boolean;
   priority?: number;
+  /** Paths, relative to the repository root, the intent may change. */
+  writes?: string[];
+  /** Unmerged intents whose patches this intent merges into the checkout. */
+  resolves?: number[];
+}
+
+/** One criterion's verdict in a review, in goal order. */
+export interface ReviewCheck {
+  verdict: "pass" | "fail" | "unknown";
+  kind: "behavior" | "content";
+  evidence: string;
+  commands: Array<{ command: string; exitCode: number }>;
+  sources: number[];
+}
+
+export interface ReviewSpec {
+  status: "complete" | "revise";
+  feedback: string;
+  checks: ReviewCheck[];
 }
 
 export interface FactSpec {
@@ -334,6 +435,7 @@ export class Board {
     request: string;
     settings: RunSettings;
     deadlineAt: number | null;
+    context?: string | null;
   }): Run {
     const t = this.now();
     const seq =
@@ -344,8 +446,8 @@ export class Board {
     this.db
       .prepare(
         `INSERT INTO runs (id, seq, project_id, origin_thread_id, environment_id, title, request,
-           status, settings, deadline_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+           status, settings, deadline_at, context, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -357,6 +459,7 @@ export class Board {
         input.request,
         JSON.stringify(input.settings),
         input.deadlineAt,
+        input.context?.trim() || null,
         t,
         t,
       );
@@ -402,7 +505,7 @@ export class Board {
     patch: Partial<
       Pick<
         Run,
-        "plannerThreadId" | "status" | "todo" | "summary" | "nudgeFingerprint" | "finishedAt" | "settings"
+        "plannerThreadId" | "status" | "todo" | "summary" | "nudgeFingerprint" | "finishedAt" | "settings" | "environmentId" | "cycle" | "baselineCommit" | "context"
       >
     >,
   ): Run {
@@ -412,6 +515,10 @@ export class Board {
       plannerThreadId: ["planner_thread_id", (v) => v],
       status: ["status", (v) => v],
       todo: ["todo", (v) => JSON.stringify(v)],
+      environmentId: ["environment_id", (v) => v],
+      cycle: ["cycle", (v) => v],
+      baselineCommit: ["baseline_commit", (v) => v],
+      context: ["context", (v) => v],
       summary: ["summary", (v) => v],
       nudgeFingerprint: ["nudge_fingerprint", (v) => v],
       finishedAt: ["finished_at", (v) => v],
@@ -669,11 +776,28 @@ export class Board {
 
   // ------------------------------------------------------------ intents
 
+  /** Every intent that `id` depends on, directly or through other intents. */
+  private ancestors(id: number): Set<number> {
+    const seen = new Set<number>();
+    const stack = [id];
+    while (stack.length) {
+      const node = this.getNode(stack.pop()!);
+      for (const dep of (node?.data.dependsOn as number[] | undefined) ?? []) {
+        if (!seen.has(dep)) {
+          seen.add(dep);
+          stack.push(dep);
+        }
+      }
+    }
+    return seen;
+  }
+
   /**
-   * Queues new intents. Refuses an intent whose wording matches a queued,
-   * running, or waiting intent, and enforces the run's intent budget and the
-   * one-check-intent-per-batch rule. `dependsOn` can name an existing intent
-   * by id or an intent in the same batch by its `key`.
+   * Queues new intents. Refuses an intent that repeats a live one, one whose
+   * writes overlap a live intent it does not depend on, more check intents
+   * than the run's check mode allows, and anything past the budget or the
+   * deadline. `dependsOn` names an existing intent by id or an intent in the
+   * same batch by its `key`.
    */
   addIntents(runId: string, specs: IntentSpec[], origin: string): BoardNode[] {
     const run = this.requireRun(runId);
@@ -682,14 +806,15 @@ export class Board {
     if (run.deadlineAt !== null && this.now() > run.deadlineAt) {
       throw new BoardError(`the run's deadline has passed. Verify what exists and finish the run.`);
     }
-    const used = this.countNodes(runId, "intent", ["queued", "running", "waiting", "done", "blocked", "exhausted", "stopped"]);
+    if (this.liveReview(runId)) throw new BoardError(`a review is in progress; wait for its result before you dispatch`);
+    const used = this.countNodes(runId, "intent", ["queued", "running", "waiting", "done", "blocked", "exhausted", "stopped", "unmerged"]);
     if (used + specs.length > run.settings.maxIntents) {
       throw new BoardError(
         `the run's budget is ${run.settings.maxIntents} intents and ${used} are used. Verify what exists and finish the run, or ask the user to raise the budget.`,
       );
     }
-    const live = this.listNodes(runId, "intent", { statuses: LIVE_INTENT });
-    const liveKeys = new Map(live.map((n) => [normalizeText(n.summary), n.id]));
+    const live = this.listNodes(runId, "intent", { statuses: [...LIVE_INTENT, "unmerged"] });
+    const liveKeys = new Map(live.filter((n) => n.status !== "unmerged").map((n) => [normalizeText(n.summary), n.id]));
     const batchKeys = new Set<string>();
     for (const spec of specs) {
       const key = normalizeText(spec.summary);
@@ -699,10 +824,24 @@ export class Board {
       if (batchKeys.has(key)) throw new BoardError(`intent "${oneLine(spec.summary, 80)}" appears twice in this call`);
       batchKeys.add(key);
     }
-    if (specs.filter((s) => s.check).length > 1) {
-      throw new BoardError(`dispatch at most one check intent per call; make it depend on all the work it checks`);
+    const checks = specs.filter((s) => isCheckIntent(s.summary, s.check)).length;
+    if (checks) {
+      if (run.settings.checks === "review") {
+        throw new BoardError(`this run's check mode is "review": the reviewer is the only check. Dispatch work, not check intents (summaries that start with Verify, Check, Validate, or Audit count as checks).`);
+      }
+      if (run.settings.checks === "once") {
+        const thisCycle = this.listNodes(runId, "intent").filter(
+          (i) => i.status !== "skipped" && Number(i.data.cycle ?? 1) === run.cycle && i.data.check,
+        ).length;
+        if (thisCycle + checks > 1) {
+          throw new BoardError(`this run allows one check intent per cycle and cycle ${run.cycle} ${thisCycle ? "already has one" : "would get " + checks}. Make one check intent depend on all the work it checks; the reviewer checks every goal anyway.`);
+        }
+      }
+      if (checks > 1) throw new BoardError(`dispatch at most one check intent per call; make it depend on all the work it checks`);
     }
     const goals = this.listNodes(runId, "goal", { statuses: ["open"] });
+    const workerCount = Math.max(1, run.settings.workers.length);
+    let rotation = this.countNodes(runId, "intent");
     const keyToId = new Map<string, number>();
     const added: BoardNode[] = [];
     const tx = this.db.transaction(() => {
@@ -717,8 +856,34 @@ export class Board {
           if (!Number.isInteger(id)) {
             throw new BoardError(`dependsOn "${String(dep)}" is not an intent id or the key of an earlier intent in this call`);
           }
-          this.requireNode(id, runId, "intent");
+          const depNode = this.requireNode(id, runId, "intent");
+          if (["blocked", "exhausted", "stopped", "skipped"].includes(depNode.status)) {
+            throw new BoardError(`intent #${id} ended as ${depNode.status}, so nothing can depend on it`);
+          }
           dependsOn.push(id);
+        }
+        const resolves: number[] = [];
+        const writes = new Set((spec.writes ?? []).map(normalizeWritePath));
+        for (const id of spec.resolves ?? []) {
+          const target = this.requireNode(id, runId, "intent");
+          const partial = ["exhausted", "blocked", "stopped"].includes(target.status) && Boolean(target.data.patch);
+          if (target.status !== "unmerged" && !partial) {
+            throw new BoardError(`intent #${id} is ${target.status} without a saved patch; resolves takes unmerged intents, or exhausted, blocked, or stopped intents that left partial work`);
+          }
+          for (const f of (target.data.files as string[] | undefined) ?? []) writes.add(f);
+          resolves.push(id);
+        }
+        const writeList = [...writes];
+        // Concurrent intents that can touch the same paths would conflict at integration.
+        const mine = new Set(dependsOn.flatMap((d) => [d, ...this.ancestors(d)]));
+        for (const other of [...live, ...added]) {
+          if (mine.has(other.id) || resolves.includes(other.id)) continue;
+          const theirs = (other.data.writes as string[] | undefined) ?? [];
+          if (writeList.length && theirs.length && overlaps(writeList, theirs)) {
+            throw new BoardError(
+              `intent "${oneLine(spec.summary, 60)}" may write the same paths as #${other.id} (${theirs.join(", ")}). Keep the writes of concurrent intents disjoint, or add dependsOn: [${other.id}].`,
+            );
+          }
         }
         const explicitGoals = (spec.parents ?? []).filter((p) => this.getNode(p)?.kind === "goal");
         const parents: Array<{ id: number; rel: Rel }> = [
@@ -727,6 +892,7 @@ export class Board {
             .map((id) => ({ id, rel: "derived_from" as Rel })),
           ...(explicitGoals.length ? explicitGoals : goals.map((g) => g.id)).map((id) => ({ id, rel: "spawns" as Rel })),
           ...dependsOn.map((id) => ({ id, rel: "depends_on" as Rel })),
+          ...resolves.map((id) => ({ id, rel: "derived_from" as Rel })),
         ];
         const node = this.addNode({
           runId,
@@ -736,13 +902,18 @@ export class Board {
           detail: spec.instructions?.trim() || null,
           data: {
             dependsOn,
-            check: Boolean(spec.check),
+            check: isCheckIntent(spec.summary, spec.check),
             priority: spec.priority ?? 5,
             attempts: 0,
+            cycle: run.cycle,
+            writes: writeList,
+            resolves,
+            target: rotation % workerCount,
           },
           origin,
           parents,
         });
+        rotation += 1;
         if (spec.key) keyToId.set(spec.key, node.id);
         added.push(node);
       }
@@ -781,7 +952,7 @@ export class Board {
       }
     }
     const running = this.countNodes(runId, "intent", ["running"]);
-    const slots = run.status === "running" ? Math.max(0, run.settings.parallel - running) : 0;
+    const slots = run.status === "running" && !this.liveReview(runId) ? Math.max(0, run.settings.parallel - running) : 0;
     const ready = this.listNodes(runId, "intent", { statuses: ["queued"] })
       .filter((intent) =>
         ((intent.data.dependsOn as number[] | undefined) ?? []).every((d) => this.getNode(d)?.status === "done"),
@@ -801,22 +972,40 @@ export class Board {
 
   finishIntent(
     intentId: number,
-    report: { status: "done" | "blocked" | "exhausted" | "stopped"; summary: string; artifacts?: string[]; origin: string; error?: string },
+    report: {
+      status: "done" | "blocked" | "exhausted" | "stopped" | "unmerged";
+      summary: string;
+      output?: string;
+      origin: string;
+      error?: string;
+      extra?: Record<string, unknown>;
+    },
   ): BoardNode {
     const intent = this.requireNode(intentId, undefined, "intent");
     if (SETTLED_INTENT.includes(intent.status as IntentStatus)) {
       throw new BoardError(`intent #${intentId} already finished as ${intent.status}`);
     }
+    if (intent.status === "unmerged" && report.status !== "stopped") {
+      throw new BoardError(`intent #${intentId} already finished and waits for integration`);
+    }
     return this.updateNode(intentId, {
       status: report.status,
       data: {
-        report: report.summary.trim(),
-        artifacts: report.artifacts ?? [],
+        ...(report.summary.trim() || !intent.data.report ? { report: report.summary.trim() } : {}),
+        ...(report.output ? { output: report.output } : {}),
         finishedAt: this.now(),
         finishedBy: report.origin,
         ...(report.error ? { error: report.error } : {}),
+        ...report.extra,
       },
     });
+  }
+
+  /** Moves an unmerged intent to done once its patch is in the checkout. */
+  markIntegrated(intentId: number, extra: Record<string, unknown> = {}): BoardNode {
+    const intent = this.requireNode(intentId, undefined, "intent");
+    if (intent.status !== "unmerged") throw new BoardError(`intent #${intentId} is ${intent.status}, not unmerged`);
+    return this.updateNode(intentId, { status: "done", data: { integrated: true, integrationError: null, ...extra } });
   }
 
   // ------------------------------------------------------------ facts, hints, questions
@@ -930,13 +1119,212 @@ export class Board {
     return { question: updated, intent: nextIntent };
   }
 
+  // ------------------------------------------------------------ reviews and planner fixes
+
+  liveReview(runId: string): BoardNode | null {
+    return this.listNodes(runId, "review", { statuses: ["running"], order: "desc", limit: 1 })[0] ?? null;
+  }
+
+  /** The newest review that returned a verdict. */
+  lastVerdict(runId: string): BoardNode | null {
+    return this.listNodes(runId, "review", { statuses: ["complete", "revise"], order: "desc", limit: 1 })[0] ?? null;
+  }
+
+  reviewForThread(threadId: string): BoardNode | null {
+    const row = this.db
+      .prepare(`SELECT * FROM nodes WHERE kind = 'review' AND thread_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(threadId) as Row | undefined;
+    return row ? toNode(row) : null;
+  }
+
+  /**
+   * Opens a review of the current cycle. Needs goals, no worker running or
+   * waiting, and no unmerged patch. Queued intents are skipped, as in Altex.
+   */
+  startReview(runId: string, note: string | null, origin: string): { review: BoardNode; skipped: number[] } {
+    const run = this.requireRun(runId);
+    if (run.status !== "running") throw new BoardError(`run ${runId} is ${run.status}`);
+    if (!this.countNodes(runId, "goal")) throw new BoardError(`the run has no goals to review`);
+    if (this.liveReview(runId)) throw new BoardError(`a review is already in progress`);
+    const busy = this.listNodes(runId, "intent", { statuses: ["running", "waiting"] });
+    if (busy.length) {
+      throw new BoardError(`intents ${busy.map((i) => `#${i.id}`).join(", ")} are still running or waiting. Review the whole result once they finish, or stop them.`);
+    }
+    const unmerged = this.listNodes(runId, "intent", { statuses: ["unmerged"] });
+    if (unmerged.length) {
+      throw new BoardError(`intents ${unmerged.map((i) => `#${i.id}`).join(", ")} finished but their patches are not in the checkout. Integrate, resolve, or stop them first.`);
+    }
+    const skipped: number[] = [];
+    for (const intent of this.listNodes(runId, "intent", { statuses: ["queued"] })) {
+      this.updateNode(intent.id, { status: "skipped", data: { error: "skipped when the review started" } });
+      skipped.push(intent.id);
+    }
+    const review = this.addNode({
+      runId,
+      kind: "review",
+      status: "running",
+      summary: `Review of cycle ${run.cycle}`,
+      detail: note?.trim() || null,
+      data: { cycle: run.cycle, attempts: 0 },
+      origin,
+    });
+    return { review, skipped };
+  }
+
+  /**
+   * Records a reviewer's verdict with Altex's rules: one check per goal in
+   * goal order, complete only when every check passes, a behavior check
+   * passes only on a command that exited 0, and sources are finished intents
+   * of the current cycle. Each passing check becomes an observed fact that
+   * proves its goal. A revise verdict reopens the goals that did not pass and
+   * starts the next cycle. `checkIn` lists goals that failed this review and
+   * the one before it, which the planner must take to the user.
+   */
+  submitReview(reviewId: number, spec: ReviewSpec, origin: string): { review: BoardNode; reopened: number[]; proved: number[]; checkIn: number[] } {
+    const review = this.requireNode(reviewId, undefined, "review");
+    if (review.status !== "running") throw new BoardError(`review #${reviewId} already ended as ${review.status}`);
+    const run = this.requireRun(review.runId);
+    const goals = this.listNodes(run.id, "goal");
+    if (spec.checks.length !== goals.length) {
+      throw new BoardError(`return exactly ${goals.length} checks, one per goal in this order: ${goals.map((g) => `#${g.id}`).join(", ")}`);
+    }
+    if (!spec.feedback.trim()) throw new BoardError(`give feedback the planner can act on`);
+    spec.checks.forEach((check, i) => {
+      const goal = goals[i]!;
+      if (!check.evidence.trim()) throw new BoardError(`check ${i + 1} (goal #${goal.id}) needs evidence`);
+      if (check.verdict === "pass" && check.kind === "behavior" && !check.commands.some((c) => c.exitCode === 0)) {
+        throw new BoardError(
+          `check ${i + 1} (goal #${goal.id}) is a behavior check, so it passes only on a command you ran in this review that exited 0. Reading, listing, or copying files does not count. Run one, or use unknown.`,
+        );
+      }
+      for (const source of check.sources) {
+        const node = this.getNode(source);
+        if (!node || node.runId !== run.id || node.kind !== "intent" || node.status !== "done" || Number(node.data.cycle ?? 1) !== run.cycle) {
+          throw new BoardError(`check ${i + 1} cites #${source}, which is not a finished intent of cycle ${run.cycle}. Earlier cycles' work is part of the result, not a source.`);
+        }
+      }
+    });
+    if (spec.status === "complete" && spec.checks.some((c) => c.verdict !== "pass")) {
+      throw new BoardError(`a complete review needs every check to pass; one fail or unknown means revise`);
+    }
+    const previous = this.lastVerdict(run.id);
+    const previousChecks = (previous?.data.checks as ReviewCheck[] | undefined) ?? [];
+    const reopened: number[] = [];
+    const proved: number[] = [];
+    const checkIn: number[] = [];
+    const tx = this.db.transaction(() => {
+      spec.checks.forEach((check, i) => {
+        const goal = goals[i]!;
+        if (check.verdict === "pass") {
+          const commands = check.commands.map((c) => `$ ${c.command} (exit ${c.exitCode})`).join("\n");
+          const [fact] = this.recordFacts(
+            run.id,
+            null,
+            [
+              {
+                summary: `Review of cycle ${run.cycle}: goal #${goal.id} passes`,
+                detail: check.evidence,
+                evidence: clip(`${commands ? `${commands}\n` : ""}${check.evidence}`, 2000),
+                confidence: "observed",
+                source: "tool_output",
+                parents: [goal.id],
+              },
+            ],
+            origin,
+          );
+          this.addEdge(reviewId, fact!.id, "yields");
+          if (this.requireNode(goal.id).status !== "met") {
+            this.proveGoal(run.id, goal.id, [fact!.id], `The cycle ${run.cycle} review passed this goal.`, origin);
+            proved.push(goal.id);
+          }
+        } else {
+          if (goal.status === "met") this.reopenGoal(run.id, goal.id, `review #${reviewId}: ${check.verdict}`, origin);
+          reopened.push(goal.id);
+          const before = previousChecks[i];
+          if (previous && before && before.verdict !== "pass") checkIn.push(goal.id);
+        }
+      });
+      this.updateNode(reviewId, {
+        status: spec.status,
+        summary: oneLine(`Cycle ${run.cycle} review: ${spec.status}. ${spec.feedback}`, 400),
+        data: { checks: spec.checks, feedback: spec.feedback.trim(), checkIn, finishedAt: this.now() },
+      });
+      if (spec.status === "revise") this.updateRun(run.id, { cycle: run.cycle + 1 });
+    });
+    tx();
+    return { review: this.requireNode(reviewId), reopened, proved, checkIn };
+  }
+
+  failReview(reviewId: number, error: string): BoardNode {
+    const review = this.requireNode(reviewId, undefined, "review");
+    if (review.status !== "running") return review;
+    return this.updateNode(reviewId, { status: "failed", data: { error, finishedAt: this.now() } });
+  }
+
+  addFix(runId: string, text: string, files: string[], origin: string): BoardNode {
+    const run = this.requireRun(runId);
+    if (!text.trim()) throw new BoardError(`describe the fix`);
+    const paths = files.map(normalizeWritePath);
+    if (!paths.length) throw new BoardError(`name at least one file the fix changed`);
+    if (this.liveReview(runId)) throw new BoardError(`a review is in progress; make fixes after its verdict`);
+    return this.addNode({ runId, kind: "fix", status: "active", summary: text.trim(), data: { files: paths, cycle: run.cycle }, origin });
+  }
+
+  /**
+   * Why the run cannot finish as complete yet, or null. Every goal must be
+   * met, every patch integrated, and, when the run requires a review, the
+   * newest review must be complete with no work, fix, goal, constraint, or
+   * user hint recorded after it.
+   */
+  completeBlocker(runId: string): string | null {
+    const run = this.requireRun(runId);
+    const goals = this.listNodes(runId, "goal");
+    if (!goals.length) return "the run has no goals, so it cannot be complete";
+    const open = goals.filter((g) => g.status !== "met");
+    if (open.length) return `goals ${open.map((g) => `#${g.id}`).join(", ")} are still open. Prove them, or finish as blocked.`;
+    const unmerged = this.listNodes(runId, "intent", { statuses: ["unmerged"] });
+    if (unmerged.length) return `intents ${unmerged.map((i) => `#${i.id}`).join(", ")} are not integrated`;
+    if (this.liveReview(runId)) return "a review is in progress";
+    if (!run.settings.review) return null;
+    const last = this.lastVerdict(runId);
+    if (!last || last.status !== "complete") return "the run needs a complete review first: call blackboard_request_review";
+    const later = (this.db
+      .prepare(
+        `SELECT id, kind, origin FROM nodes WHERE run_id = ? AND id > ? AND (kind IN ('intent','fix','goal','constraint') OR (kind = 'hint' AND origin = 'user'))
+         ORDER BY id LIMIT 5`,
+      )
+      .all(runId, last.id) as Row[]);
+    if (later.length) {
+      return `${later.map((r) => `${String(r.kind)} #${String(r.id)}`).join(", ")} came after the last complete review (#${last.id}), so a new review must cover them`;
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------------ patches
+
+  /** Stores a patch (base-<intent>, intent-<intent>, review-<review>); null deletes it. */
+  savePatch(runId: string, name: string, content: Buffer | null): void {
+    if (!content) {
+      this.db.prepare(`DELETE FROM patches WHERE run_id = ? AND name = ?`).run(runId, name);
+      return;
+    }
+    this.db
+      .prepare(`INSERT OR REPLACE INTO patches (run_id, name, content, created_at) VALUES (?, ?, ?, ?)`)
+      .run(runId, name, content, this.now());
+  }
+
+  getPatch(runId: string, name: string): Buffer | null {
+    const row = this.db.prepare(`SELECT content FROM patches WHERE run_id = ? AND name = ?`).get(runId, name) as Row | undefined;
+    return row ? (row.content as Buffer) : null;
+  }
+
   // ------------------------------------------------------------ run fingerprint
 
   /** Changes whenever goals, intents, or questions change state. */
   fingerprint(runId: string): string {
     const rows = this.db
       .prepare(
-        `SELECT id, status FROM nodes WHERE run_id = ? AND kind IN ('goal','intent','question','fact','hint') ORDER BY id`,
+        `SELECT id, status FROM nodes WHERE run_id = ? AND kind IN ('goal','intent','question','fact','hint','review','fix') ORDER BY id`,
       )
       .all(runId) as Row[];
     return rows.map((r) => `${r.id}:${r.status}`).join(",");
