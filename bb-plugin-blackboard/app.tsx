@@ -2,14 +2,21 @@
 // belongs to, for planner, worker, and reviewer threads. It is read-only;
 // the user steers a run by talking to its planner thread. Board writes on
 // the server invalidate the `board` read, so the tab stays live.
+//
+// The layout uses bb's own Info tab components (InfoSection, DetailRow,
+// InfoList, InfoListRow) so the tab looks like the host's panels.
 
 import {
   definePluginApp,
+  experimental_DetailRow as DetailRow,
   experimental_Icon as Icon,
+  experimental_InfoList as InfoList,
+  experimental_InfoListRow as InfoListRow,
+  experimental_InfoSection as InfoSection,
   experimental_useRpcQuery as useRpcQuery,
   useBbNavigate,
 } from "@get-bb/plugin-sdk/app";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { rpcContract, type BoardView, type NodeView } from "./rpc";
 
 export const TAB_ID = "board";
@@ -25,370 +32,402 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 const numbers = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => typeof x === "number") : []);
 
-function ago(at: number, now = Date.now()): string {
-  const minutes = Math.round((now - at) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+function minutes(ms: number): string {
+  const m = Math.round(Math.abs(ms) / 60_000);
+  if (m < 1) return "under a minute";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
 }
 
-type Tone = "neutral" | "active" | "good" | "warn" | "bad";
+function ago(at: number): string {
+  return Date.now() - at < 60_000 ? "Just now" : `${minutes(Date.now() - at)} ago`;
+}
 
-const TONE_CLASS: Record<Tone, string> = {
-  neutral: "border-border text-muted-foreground",
-  active: "border-primary/40 bg-primary/10 text-primary",
-  good: "border-primary/40 text-primary",
-  warn: "border-border bg-muted text-foreground",
-  bad: "border-destructive/40 bg-destructive/10 text-destructive",
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A fact's source as a label, such as "Tool output". */
+const source = (f: NodeView) => cap(String(f.data.source).replace(/_/g, " "));
+
+// ---------------------------------------------------------------- status dots
+
+type DotStyle = { className: string; label: string };
+
+/** An 8px status mark. Filled means settled or active; hollow means not started or set aside. */
+const DOT: Record<string, DotStyle> = {
+  running: { className: "bg-primary animate-pulse", label: "Running" },
+  queued: { className: "border border-muted-foreground/60", label: "Queued" },
+  waiting: { className: "border-2 border-primary", label: "Waiting for an answer" },
+  unmerged: { className: "border-2 border-destructive", label: "Not merged" },
+  done: { className: "bg-muted-foreground/70", label: "Done" },
+  blocked: { className: "bg-destructive", label: "Blocked" },
+  exhausted: { className: "bg-destructive", label: "Exhausted" },
+  failed: { className: "bg-destructive", label: "Failed" },
+  stopped: { className: "border border-muted-foreground/40", label: "Stopped" },
+  skipped: { className: "border border-muted-foreground/40", label: "Skipped" },
+  complete: { className: "bg-primary", label: "Complete" },
+  revise: { className: "border-2 border-destructive", label: "Revise" },
+  canceled: { className: "bg-muted-foreground/50", label: "Canceled" },
+  open: { className: "border-2 border-primary", label: "Open" },
+  answered: { className: "bg-muted-foreground/70", label: "Answered" },
+  pass: { className: "bg-primary", label: "Pass" },
+  fail: { className: "bg-destructive", label: "Fail" },
+  unknown: { className: "border border-muted-foreground/60", label: "Unknown" },
 };
 
-const STATUS_TONE: Record<string, Tone> = {
-  running: "active",
-  queued: "neutral",
-  waiting: "warn",
-  unmerged: "warn",
-  done: "good",
-  met: "good",
-  complete: "good",
-  answered: "neutral",
-  open: "neutral",
-  revise: "warn",
-  blocked: "bad",
-  exhausted: "bad",
-  failed: "bad",
-  canceled: "bad",
-  stopped: "neutral",
-  skipped: "neutral",
-};
-
-function Badge({ children, tone }: { children: ReactNode; tone?: Tone }) {
+function Dot({ status }: { status: string }) {
+  const style = DOT[status] ?? DOT.queued!;
   return (
-    <span className={`inline-flex shrink-0 items-center rounded border px-1.5 py-px text-[11px] leading-4 font-medium ${TONE_CLASS[tone ?? "neutral"]}`}>
-      {children}
+    <span className="flex size-3 shrink-0 items-center justify-center" title={style.label} aria-label={style.label} role="img">
+      <span className={`size-2 rounded-full ${style.className}`} />
     </span>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return <Badge tone={STATUS_TONE[status] ?? "neutral"}>{status}</Badge>;
-}
+// ---------------------------------------------------------------- building blocks
 
-function ThreadLink({ threadId, label }: { threadId: string; label: string }) {
-  const navigate = useBbNavigate();
+function Muted({ children, tone, mono }: { children: ReactNode; tone?: "bad"; mono?: boolean }) {
   return (
-    <button
-      type="button"
-      className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-      onClick={() => navigate.toThread(threadId)}
-    >
-      <Icon name="MessageSquare" className="size-3" />
-      {label}
-    </button>
+    <p className={`text-xs leading-snug break-words whitespace-pre-wrap ${tone === "bad" ? "text-destructive" : "text-muted-foreground"} ${mono ? "font-mono text-[11px]" : ""}`}>
+      {children}
+    </p>
   );
 }
 
-function Section({ title, count, children, defaultOpen = true }: { title: string; count?: number; children: ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="space-y-2">
-      <button
-        type="button"
-        className="flex w-full items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:text-foreground"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
-        {title}
-        {count !== undefined && <span className="font-normal">({count})</span>}
-      </button>
-      {open && <div className="space-y-2">{children}</div>}
-    </section>
-  );
-}
-
-function Card({ children, highlight }: { children: ReactNode; highlight?: boolean }) {
-  return (
-    <div className={`space-y-1 rounded-md border p-2 ${highlight ? "border-primary/60 bg-primary/5" : "border-border bg-card"}`}>{children}</div>
-  );
-}
-
-function Paths({ paths, label }: { paths: string[]; label: string }) {
-  if (!paths.length) return null;
-  return (
-    <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-      <span>{label}:</span>
-      {paths.slice(0, 8).map((p) => (
-        <code key={p} className="rounded bg-muted px-1 font-mono text-[11px] text-foreground">
-          {p}
-        </code>
-      ))}
-      {paths.length > 8 && <span>+{paths.length - 8} more</span>}
-    </div>
-  );
-}
-
-function Note({ children, tone }: { children: ReactNode; tone?: "bad" }) {
-  return <p className={`text-xs whitespace-pre-wrap ${tone === "bad" ? "text-destructive" : "text-muted-foreground"}`}>{children}</p>;
-}
-
-// ---------------------------------------------------------------- sections
-
-function RunHeader({ view, threadId }: { view: BoardView; threadId: string }) {
-  const { run } = view;
-  const used = view.nodes.filter((n) => n.kind === "intent").length;
-  const workspace =
-    run.settings.workspace === "worktree"
-      ? `worktrees at ${run.baselineCommit?.slice(0, 10) ?? "baseline"}`
-      : run.settings.workspace === "shared"
-        ? "shared checkout"
-        : "workspace pending";
-  const you =
-    view.role === "planner"
-      ? "This is the run's planner thread. Steer the run by talking to it."
-      : view.role === "worker"
-        ? `This thread works on intent #${view.nodeId}.`
-        : `This thread is the reviewer for review #${view.nodeId}.`;
-  return (
-    <header className="space-y-1.5">
+/** A wrapping list row: a 12px mark, text that may run to several lines, and detail lines under it. */
+function Row({
+  mark,
+  title,
+  trailing,
+  details,
+  onSelect,
+  highlight,
+  tooltip,
+}: {
+  mark: ReactNode;
+  title: ReactNode;
+  trailing?: ReactNode;
+  details?: ReactNode;
+  onSelect?: () => void;
+  highlight?: boolean;
+  tooltip?: string;
+}) {
+  const body = (
+    <>
       <div className="flex items-start gap-2">
-        <h2 className="min-w-0 flex-1 text-sm font-semibold text-foreground">
-          {run.id}: {run.title}
-        </h2>
-        <StatusBadge status={run.status} />
+        <span className="mt-[3px]">{mark}</span>
+        <span className="min-w-0 flex-1 text-[13px] leading-snug text-foreground">{title}</span>
+        {trailing && <span className="shrink-0 text-xs leading-5 text-muted-foreground">{trailing}</span>}
       </div>
-      <div className="flex flex-wrap gap-1">
-        <Badge>cycle {run.cycle}</Badge>
-        <Badge>
-          {used}/{run.settings.maxIntents} intents
-        </Badge>
-        <Badge>{run.settings.parallel} at once</Badge>
-        <Badge>checks: {run.settings.checks}</Badge>
-        <Badge>{run.settings.review ? "review required" : "no review"}</Badge>
-        <Badge>{workspace}</Badge>
-        {run.deadlineAt !== null && <Badge tone={run.deadlineAt < Date.now() ? "bad" : "neutral"}>deadline {new Date(run.deadlineAt).toLocaleTimeString()}</Badge>}
+      {details && <div className="mt-0.5 space-y-0.5 pl-5">{details}</div>}
+    </>
+  );
+  const className = `block w-full rounded-md px-1.5 py-1 text-left ${highlight ? "bg-accent" : ""}`;
+  return (
+    <li title={tooltip}>
+      {onSelect ? (
+        <button type="button" className={`${className} hover:bg-accent/60`} onClick={onSelect}>
+          {body}
+        </button>
+      ) : (
+        <div className={className}>{body}</div>
+      )}
+    </li>
+  );
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <p className="px-1.5 text-xs text-muted-foreground">{children}</p>;
+}
+
+// ---------------------------------------------------------------- header
+
+function Header({ view, threadId }: { view: BoardView; threadId: string }) {
+  const { run } = view;
+  const navigate = useBbNavigate();
+  const goals = view.nodes.filter((n) => n.kind === "goal");
+  const met = goals.filter((g) => g.status === "met").length;
+  const percent = goals.length ? Math.round((met / goals.length) * 100) : 0;
+  const role =
+    view.role === "planner"
+      ? "Talk to this thread to steer the run."
+      : view.role === "worker"
+        ? "This thread works on the highlighted intent."
+        : "This thread reviews the highlighted cycle.";
+  return (
+    <header className="space-y-2 px-1.5">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Dot status={run.status} />
+        <span className="text-foreground">{cap(run.status)}</span>
+        <span>· cycle {run.cycle}</span>
+        <span>· {run.id}</span>
+        <span className="ml-auto">{ago(run.createdAt)}</span>
       </div>
-      <Note>
-        {you} Started {ago(run.createdAt)}.
-      </Note>
-      {run.plannerThreadId && run.plannerThreadId !== threadId && <ThreadLink threadId={run.plannerThreadId} label="Open the planner thread" />}
-      {run.summary && <Note>{run.summary}</Note>}
+      <h2 className="text-sm leading-snug font-semibold text-foreground">{run.title}</h2>
+      <div className="space-y-1">
+        <div className="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={met} aria-valuemax={goals.length} aria-label="Goals met">
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {goals.length ? `${met} of ${goals.length} goals met` : "No goals yet"}
+        </p>
+      </div>
+      {run.summary && <Muted>{run.summary}</Muted>}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 flex-1">{role}</span>
+        {run.plannerThreadId && run.plannerThreadId !== threadId && (
+          <button type="button" className="shrink-0 text-foreground underline-offset-2 hover:underline" onClick={() => navigate.toThread(run.plannerThreadId!)}>
+            Open planner
+          </button>
+        )}
+      </div>
     </header>
   );
 }
 
-function Goals({ goals }: { goals: NodeView[] }) {
-  const met = goals.filter((g) => g.status === "met").length;
+function RunDetails({ view }: { view: BoardView }) {
+  const { run } = view;
+  const s = run.settings;
+  const used = view.nodes.filter((n) => n.kind === "intent").length;
+  const workspace =
+    s.workspace === "worktree"
+      ? `Worktrees from ${run.baselineCommit?.slice(0, 7) ?? "the baseline"}`
+      : s.workspace === "shared"
+        ? "Shared checkout"
+        : "Set up at first dispatch";
+  const checks = s.checks === "review" ? "no check intents" : s.checks === "once" ? "one check intent per cycle" : "thorough checks";
   return (
-    <Section title={`Goals, ${met} of ${goals.length} met`}>
-      {goals.length === 0 && <Note>No goals yet. The planner proposes them first.</Note>}
-      <ol className="space-y-1.5">
-        {goals.map((goal, i) => {
-          const proof = goal.data.proof as { reason?: unknown; evidence?: unknown } | null | undefined;
-          const reopened = goal.data.reopened as { reason?: unknown } | null | undefined;
-          return (
-            <li key={goal.id} className="flex items-start gap-2">
-              <Icon
-                name={goal.status === "met" ? "CircleCheck" : "Circle"}
-                className={`mt-0.5 size-4 shrink-0 ${goal.status === "met" ? "text-primary" : "text-muted-foreground"}`}
-              />
-              <div className="min-w-0 space-y-0.5">
-                <p className="text-sm text-foreground">
-                  <span className="text-muted-foreground">
-                    {i + 1}. #{goal.id}
-                  </span>{" "}
-                  {goal.summary}
-                </p>
-                {proof && str(proof.reason) && (
-                  <Note>
-                    Proved: {str(proof.reason)} (facts {numbers(proof.evidence).map((e) => `#${e}`).join(", ")})
-                  </Note>
-                )}
-                {goal.status === "open" && reopened && str(reopened.reason) && <Note>Reopened: {str(reopened.reason)}</Note>}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </Section>
+    <InfoSection label="Run">
+      <dl className="space-y-1 px-1.5 text-xs">
+        <DetailRow label="Intents">
+          {used} of {s.maxIntents} used, {s.parallel} at once
+        </DetailRow>
+        <DetailRow label="Review">{s.review ? `Required, ${checks}` : `Not required, ${checks}`}</DetailRow>
+        <DetailRow label="Workspace">{workspace}</DetailRow>
+        {s.smokeCheck && (
+          <DetailRow label="Smoke check">
+            <code className="font-mono text-[11px]">{s.smokeCheck}</code>
+          </DetailRow>
+        )}
+        {run.deadlineAt !== null && (
+          <DetailRow label="Deadline">
+            {run.deadlineAt > Date.now() ? `In ${minutes(run.deadlineAt - Date.now())}` : `Passed ${minutes(Date.now() - run.deadlineAt)} ago`}
+          </DetailRow>
+        )}
+      </dl>
+    </InfoSection>
   );
 }
 
-function IntentCard({ intent, highlight }: { intent: NodeView; highlight: boolean }) {
+// ---------------------------------------------------------------- sections
+
+function Goals({ goals }: { goals: NodeView[] }) {
+  return (
+    <InfoSection label="Goals" count={goals.length}>
+      {goals.length === 0 ? (
+        <Empty>The planner records goals first.</Empty>
+      ) : (
+        <ol className="space-y-0.5">
+          {goals.map((goal) => {
+            const proof = goal.data.proof as { reason?: unknown } | null | undefined;
+            const reopened = goal.data.reopened as { reason?: unknown } | null | undefined;
+            const met = goal.status === "met";
+            return (
+              <Row
+                key={goal.id}
+                tooltip={`Goal #${goal.id}`}
+                mark={
+                  met ? (
+                    <span className="flex size-3 items-center justify-center rounded-full bg-primary" title="Met" role="img" aria-label="Met">
+                      <Icon name="Check" className="size-2.5 text-primary-foreground" />
+                    </span>
+                  ) : (
+                    <Dot status="open" />
+                  )
+                }
+                title={<span className={met ? "text-muted-foreground" : undefined}>{goal.summary}</span>}
+                details={
+                  <>
+                    {met && str(proof?.reason) && <Muted>{str(proof?.reason)}</Muted>}
+                    {!met && str(reopened?.reason) && <Muted tone="bad">Reopened: {str(reopened?.reason)}</Muted>}
+                  </>
+                }
+              />
+            );
+          })}
+        </ol>
+      )}
+    </InfoSection>
+  );
+}
+
+const INTENT_ORDER = ["running", "waiting", "unmerged", "queued", "blocked", "exhausted", "done", "stopped", "skipped"];
+
+function IntentDetails({ intent }: { intent: NodeView }) {
   const d = intent.data;
   const smoke = d.smoke as { status?: unknown; exitCode?: unknown; tail?: unknown } | undefined;
   const deps = numbers(d.dependsOn);
-  const resolves = numbers(d.resolves);
+  const paths = strings(d.files).length ? strings(d.files) : strings(d.writes);
+  const live = ["running", "waiting", "queued"].includes(intent.status);
   return (
-    <Card highlight={highlight}>
-      <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 text-sm text-foreground">
-          <span className="text-muted-foreground">#{intent.id}</span> {intent.summary}
-        </p>
-        {d.check === true && <Badge>check</Badge>}
-        <StatusBadge status={intent.status} />
-      </div>
-      <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-        {num(d.cycle) !== null && <span>cycle {num(d.cycle)}</span>}
-        {deps.length > 0 && <span>after {deps.map((x) => `#${x}`).join(", ")}</span>}
-        {resolves.length > 0 && <span>resolves {resolves.map((x) => `#${x}`).join(", ")}</span>}
-        {d.integrated === true && <span>integrated</span>}
-      </div>
-      <Paths label="writes" paths={strings(d.writes)} />
-      <Paths label="changed" paths={strings(d.files)} />
-      {str(d.report) && <Note>{str(d.report)}</Note>}
-      {str(d.integrationError) && <Note tone="bad">{str(d.integrationError)}</Note>}
-      {str(d.error) && <Note tone="bad">{str(d.error)}</Note>}
-      {smoke?.status === "failed" && (
-        <Note tone="bad">
-          Smoke check failed (exit {String(smoke.exitCode)}): {str(smoke.tail)?.slice(-300)}
-        </Note>
+    <>
+      {paths.length > 0 && (
+        <Muted mono>
+          {paths.slice(0, 4).join("  ")}
+          {paths.length > 4 ? `  +${paths.length - 4}` : ""}
+        </Muted>
       )}
-      {intent.threadId && <ThreadLink threadId={intent.threadId} label="Open thread" />}
-    </Card>
+      {intent.status === "queued" && deps.length > 0 && <Muted>Starts after {deps.map((x) => `#${x}`).join(", ")}</Muted>}
+      {!live && str(d.report) && <Muted>{str(d.report)!.slice(0, 220)}</Muted>}
+      {str(d.integrationError) && <Muted tone="bad">{cap(str(d.integrationError)!)}</Muted>}
+      {str(d.error) && <Muted tone="bad">{cap(str(d.error)!)}</Muted>}
+      {smoke?.status === "failed" && (
+        <Muted tone="bad">
+          Smoke check failed with exit {String(smoke.exitCode)}
+          {str(smoke.tail) ? `: ${str(smoke.tail)!.trim().split("\n").at(-1)}` : ""}
+        </Muted>
+      )}
+    </>
   );
 }
 
-const INTENT_GROUPS: Array<{ title: string; statuses: string[]; open: boolean }> = [
-  { title: "Live intents", statuses: ["running", "waiting", "queued"], open: true },
-  { title: "Unmerged intents", statuses: ["unmerged"], open: true },
-  { title: "Done intents", statuses: ["done"], open: false },
-  { title: "Ended intents", statuses: ["blocked", "exhausted", "stopped", "skipped"], open: false },
-];
-
 function Intents({ intents, highlight }: { intents: NodeView[]; highlight: number | null }) {
-  if (!intents.length) return <Note>No intents yet.</Note>;
+  const navigate = useBbNavigate();
+  const sorted = [...intents].sort((a, b) => INTENT_ORDER.indexOf(a.status) - INTENT_ORDER.indexOf(b.status) || b.id - a.id);
+  const live = intents.filter((i) => ["running", "waiting", "queued"].includes(i.status)).length;
   return (
-    <>
-      {INTENT_GROUPS.map((group) => {
-        const items = intents.filter((i) => group.statuses.includes(i.status)).reverse();
-        if (!items.length) return null;
-        const open = group.open || items.some((i) => i.id === highlight) || items.length <= 3;
-        return (
-          <Section key={group.title} title={group.title} count={items.length} defaultOpen={open}>
-            {items.map((intent) => (
-              <IntentCard key={intent.id} intent={intent} highlight={intent.id === highlight} />
-            ))}
-          </Section>
-        );
-      })}
-    </>
+    <InfoSection label="Intents" count={intents.length} accessory={live ? <span className="text-xs text-muted-foreground">{live} live</span> : undefined}>
+      {sorted.length === 0 ? (
+        <Empty>No intents yet.</Empty>
+      ) : (
+        <ul className="space-y-0.5">
+          <InfoList
+            items={sorted}
+            limit={8}
+            getKey={(i) => String(i.id)}
+            renderItem={(intent) => (
+              <Row
+                key={intent.id}
+                tooltip={`Intent #${intent.id}${intent.threadId ? ", click to open its thread" : ""}`}
+                highlight={intent.id === highlight}
+                mark={<Dot status={intent.status} />}
+                title={
+                  <>
+                    {intent.summary}
+                    {intent.data.check === true && <span className="ml-1.5 text-xs text-muted-foreground">Check</span>}
+                  </>
+                }
+                trailing={DOT[intent.status]?.label ?? intent.status}
+                details={<IntentDetails intent={intent} />}
+                onSelect={intent.threadId ? () => navigate.toThread(intent.threadId!) : undefined}
+              />
+            )}
+          />
+        </ul>
+      )}
+    </InfoSection>
   );
 }
 
 interface Check {
   verdict?: unknown;
-  kind?: unknown;
   evidence?: unknown;
   commands?: Array<{ command?: unknown; exitCode?: unknown }>;
 }
 
 function Reviews({ reviews, goals, highlight }: { reviews: NodeView[]; goals: NodeView[]; highlight: number | null }) {
+  const navigate = useBbNavigate();
   if (!reviews.length) return null;
+  const newest = [...reviews].reverse();
   return (
-    <Section title="Reviews" count={reviews.length}>
-      {[...reviews].reverse().map((review, index) => {
-        const checks = (Array.isArray(review.data.checks) ? review.data.checks : []) as Check[];
-        const checkIn = numbers(review.data.checkIn);
-        return (
-          <Card key={review.id} highlight={review.id === highlight}>
-            <div className="flex items-start gap-2">
-              <p className="min-w-0 flex-1 text-sm text-foreground">
-                <span className="text-muted-foreground">#{review.id}</span> Cycle {num(review.data.cycle) ?? "?"} review
-              </p>
-              <StatusBadge status={review.status} />
-            </div>
-            {str(review.data.feedback) && <Note>{str(review.data.feedback)}</Note>}
-            {str(review.data.error) && <Note tone="bad">{str(review.data.error)}</Note>}
-            {checkIn.length > 0 && <Note tone="bad">Failed twice in a row: {checkIn.map((g) => `#${g}`).join(", ")}. The planner asks you what to do.</Note>}
-            {(index === 0 || review.id === highlight) && checks.length > 0 && (
-              <ul className="space-y-1 pt-1">
-                {checks.map((check, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-xs">
-                    <Icon
-                      name={check.verdict === "pass" ? "Check" : check.verdict === "fail" ? "X" : "CircleHelp"}
-                      className={`mt-px size-3.5 shrink-0 ${check.verdict === "pass" ? "text-primary" : check.verdict === "fail" ? "text-destructive" : "text-muted-foreground"}`}
-                    />
-                    <div className="min-w-0">
-                      <span className="text-foreground">Goal {goals[i] ? `#${goals[i]!.id}` : i + 1}:</span>{" "}
-                      <span className="text-muted-foreground">{str(check.evidence)}</span>
-                      {(check.commands ?? []).map((c, j) => (
-                        <code key={j} className="mt-0.5 block font-mono text-[11px] text-muted-foreground">
-                          $ {String(c.command)} (exit {String(c.exitCode)})
-                        </code>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {review.threadId && <ThreadLink threadId={review.threadId} label="Open reviewer thread" />}
-          </Card>
-        );
-      })}
-    </Section>
+    <InfoSection label="Reviews" count={reviews.length}>
+      <ul className="space-y-0.5">
+        {newest.map((review, index) => {
+          const checks = (Array.isArray(review.data.checks) ? review.data.checks : []) as Check[];
+          const checkIn = numbers(review.data.checkIn);
+          const expanded = index === 0 || review.id === highlight;
+          return (
+            <Row
+              key={review.id}
+              tooltip={`Review #${review.id}`}
+              highlight={review.id === highlight}
+              mark={<Dot status={review.status} />}
+              title={`Cycle ${num(review.data.cycle) ?? "?"}`}
+              trailing={DOT[review.status]?.label ?? review.status}
+              onSelect={review.threadId ? () => navigate.toThread(review.threadId!) : undefined}
+              details={
+                <>
+                  {str(review.data.feedback) && <Muted>{str(review.data.feedback)}</Muted>}
+                  {str(review.data.error) && <Muted tone="bad">{cap(str(review.data.error)!)}</Muted>}
+                  {checkIn.length > 0 && <Muted tone="bad">Failed twice in a row: {checkIn.map((g) => `#${g}`).join(", ")}. The planner will ask you.</Muted>}
+                  {expanded &&
+                    checks.map((check, i) => (
+                      <div key={i} className="flex items-start gap-1.5 pt-0.5">
+                        <span className="mt-[3px]">
+                          <Dot status={typeof check.verdict === "string" ? check.verdict : "unknown"} />
+                        </span>
+                        <div className="min-w-0 space-y-0.5">
+                          <p className="text-xs text-foreground">{goals[i]?.summary ?? `Goal ${i + 1}`}</p>
+                          {str(check.evidence) && <Muted>{str(check.evidence)}</Muted>}
+                          {(check.commands ?? []).map((c, j) => (
+                            <Muted key={j} mono>
+                              $ {String(c.command)} → {String(c.exitCode)}
+                            </Muted>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                </>
+              }
+            />
+          );
+        })}
+      </ul>
+    </InfoSection>
   );
 }
 
 function Questions({ questions }: { questions: NodeView[] }) {
   if (!questions.length) return null;
-  const open = questions.filter((q) => q.status === "open");
+  const open = questions.filter((q) => q.status === "open").length;
   return (
-    <Section title={open.length ? `Questions, ${open.length} open` : "Questions"} count={questions.length} defaultOpen={open.length > 0}>
-      {[...questions].reverse().map((q) => (
-        <Card key={q.id}>
-          <div className="flex items-start gap-2">
-            <p className="min-w-0 flex-1 text-sm whitespace-pre-wrap text-foreground">
-              <span className="text-muted-foreground">#{q.id}</span> {q.summary}
-            </p>
-            <StatusBadge status={q.status} />
-          </div>
-          <Note>
-            From {q.origin}
-            {q.status === "open" ? ". Answer in the planner thread." : str(q.data.answer) ? `. Answer: ${str(q.data.answer)}` : ""}
-          </Note>
-        </Card>
-      ))}
-    </Section>
+    <InfoSection label="Questions" count={questions.length} accessory={open ? <span className="text-xs text-destructive">{open} open</span> : undefined}>
+      <ul className="space-y-0.5">
+        {[...questions].reverse().map((q) => (
+          <Row
+            key={q.id}
+            tooltip={`Question #${q.id} from ${q.origin.replace(/^intent/, "Intent")}`}
+            mark={<Dot status={q.status} />}
+            title={q.summary}
+            details={
+              q.status === "open" ? <Muted>Answer it in the planner thread.</Muted> : str(q.data.answer) ? <Muted>Answer: {str(q.data.answer)}</Muted> : null
+            }
+          />
+        ))}
+      </ul>
+    </InfoSection>
   );
 }
 
-function SimpleList({ title, items, render, defaultOpen }: { title: string; items: NodeView[]; render: (n: NodeView) => ReactNode; defaultOpen?: boolean }) {
+function CompactList({ label, items, context, trailing }: { label: string; items: NodeView[]; context?: (n: NodeView) => string | undefined; trailing?: (n: NodeView) => ReactNode }) {
   if (!items.length) return null;
   return (
-    <Section title={title} count={items.length} defaultOpen={defaultOpen}>
-      <ul className="space-y-1">
-        {[...items].reverse().map((n) => (
-          <li key={n.id} className="text-sm text-foreground">
-            <span className="text-muted-foreground">#{n.id}</span> {render(n)}
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
-function Facts({ view }: { view: BoardView }) {
-  if (!view.factCount) return null;
-  return (
-    <Section title="Recent facts" count={view.factCount} defaultOpen={false}>
-      <ul className="space-y-1.5">
-        {view.facts.map((f) => (
-          <li key={f.id} className="space-y-0.5">
-            <p className="text-sm text-foreground">
-              <span className="text-muted-foreground">#{f.id}</span> {f.summary}
-            </p>
-            <div className="flex flex-wrap gap-1">
-              <Badge>{String(f.data.confidence)}</Badge>
-              <Badge>{String(f.data.source)}</Badge>
-              {f.data.negative === true && <Badge>negative</Badge>}
-              {num(f.data.intentId) !== null && <Badge>intent #{num(f.data.intentId)}</Badge>}
-            </div>
-          </li>
-        ))}
-      </ul>
-      {view.factCount > view.facts.length && <Note>Showing the newest {view.facts.length}. `bb blackboard facts {view.run.id}` lists all.</Note>}
-    </Section>
+    <InfoSection label={label} count={items.length}>
+      <InfoList
+        items={items}
+        limit={5}
+        getKey={(n) => String(n.id)}
+        renderItem={(n) => (
+          <InfoListRow
+            leading={<span className="size-1 rounded-full bg-muted-foreground/60" />}
+            name={n.summary}
+            title={`#${n.id}: ${n.summary}`}
+            context={context?.(n)}
+            trailing={trailing?.(n)}
+          />
+        )}
+      />
+    </InfoSection>
   );
 }
 
@@ -396,66 +435,59 @@ function Facts({ view }: { view: BoardView }) {
 
 export function BoardTab({ threadId }: { threadId: string }) {
   const { data, error, isLoading } = useBoard(threadId);
-  if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading the board…</div>;
-  if (error && !data) return <div className="p-4 text-sm text-destructive">Could not load the board: {error.message}</div>;
-  if (!data) return <div className="p-4 text-sm text-muted-foreground">This thread is not part of a Blackboard run.</div>;
+  if (isLoading) return <div className="p-4 text-xs text-muted-foreground">Loading the board…</div>;
+  if (error && !data) return <div className="p-4 text-xs text-destructive">Could not load the board: {error.message}</div>;
+  if (!data) return <div className="p-4 text-xs text-muted-foreground">This thread is not part of a Blackboard run.</div>;
   const of = (kind: NodeView["kind"]) => data.nodes.filter((n) => n.kind === kind);
+  const newestFirst = (kind: NodeView["kind"]) => of(kind).reverse();
   const goals = of("goal");
-  const highlight = data.nodeId;
-  const cycle = data.run.cycle;
+  const facts = data.facts;
   return (
-    <div className="h-full space-y-4 overflow-y-auto p-3">
-      <RunHeader view={data} threadId={threadId} />
-      <Goals goals={goals} />
+    <div className="flex h-full flex-col gap-5 overflow-y-auto px-2 py-3">
+      <Header view={data} threadId={threadId} />
       <Questions questions={of("question")} />
-      <Intents intents={of("intent")} highlight={highlight} />
-      <Reviews reviews={of("review")} goals={goals} highlight={highlight} />
-      <SimpleList
-        title="Guidance and hints"
-        items={of("hint")}
-        defaultOpen={false}
-        render={(n) => (
-          <>
-            {n.summary} <span className="text-xs text-muted-foreground">({n.origin})</span>
-          </>
-        )}
-      />
-      <SimpleList
-        title="Planner fixes"
-        items={of("fix")}
-        defaultOpen={of("fix").some((f) => num(f.data.cycle) === cycle)}
-        render={(n) => (
-          <>
-            {n.summary} <span className="text-xs text-muted-foreground">({strings(n.data.files).join(", ")})</span>
-          </>
-        )}
-      />
-      <SimpleList
-        title="Constraints"
+      <Goals goals={goals} />
+      <Intents intents={of("intent")} highlight={data.nodeId} />
+      <Reviews reviews={of("review")} goals={goals} highlight={data.nodeId} />
+      <CompactList label="Guidance" items={newestFirst("hint")} context={(n) => cap(n.origin)} />
+      <CompactList label="Planner fixes" items={newestFirst("fix")} context={(n) => strings(n.data.files).join(", ")} />
+      <CompactList
+        label="Constraints"
         items={of("constraint").filter((c) => c.status !== "removed")}
-        defaultOpen={false}
-        render={(n) => (
-          <>
-            <Badge tone={n.data.type === "deny" ? "bad" : "good"}>{String(n.data.type)}</Badge> {n.summary}
-          </>
-        )}
+        trailing={(n) => <span className={`text-xs ${n.data.type === "deny" ? "text-destructive" : "text-muted-foreground"}`}>{cap(String(n.data.type))}</span>}
       />
       {data.run.todo.length > 0 && (
-        <Section title="Planner todo" count={data.run.todo.length} defaultOpen={false}>
+        <InfoSection label="Planner todo" count={data.run.todo.length}>
           <ul className="space-y-0.5">
             {data.run.todo.map((item, i) => (
-              <li key={i} className="flex items-start gap-1.5 text-sm text-foreground">
-                <Icon
-                  name={item.status === "completed" ? "SquareCheck" : item.status === "in_progress" ? "SquareDot" : "Square"}
-                  className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-                />
-                {item.text}
-              </li>
+              <Row
+                key={i}
+                mark={<Dot status={item.status === "completed" ? "done" : item.status === "in_progress" ? "running" : "queued"} />}
+                title={<span className={item.status === "completed" ? "text-muted-foreground line-through" : undefined}>{item.text}</span>}
+              />
             ))}
           </ul>
-        </Section>
+        </InfoSection>
       )}
-      <Facts view={data} />
+      {facts.length > 0 && (
+        <InfoSection label="Recent facts" count={data.factCount}>
+          <InfoList
+            items={facts}
+            limit={5}
+            getKey={(f) => String(f.id)}
+            renderItem={(f) => (
+              <InfoListRow
+                leading={<span className={`size-1.5 rounded-full ${f.data.confidence === "observed" ? "bg-primary" : "border border-muted-foreground"}`} />}
+                leadingLabel={cap(String(f.data.confidence))}
+                name={f.summary}
+                title={`#${f.id}: ${f.summary} (${cap(String(f.data.confidence))}, ${source(f)})`}
+                context={num(f.data.intentId) !== null ? `Intent #${num(f.data.intentId)}` : source(f)}
+              />
+            )}
+          />
+        </InfoSection>
+      )}
+      <RunDetails view={data} />
     </div>
   );
 }

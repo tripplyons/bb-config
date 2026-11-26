@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { fireEvent } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { describe, expect, it } from "vitest";
 import type { BoardView, NodeView } from "./rpc";
@@ -88,25 +87,31 @@ describe("Board tab", () => {
   it("renders the run's sections and highlights the thread's own intent", async () => {
     const registration = await tab();
     const slot = renderSlot(registration as never, { threadId: "thr_3", environment: null } as never, { rpc: { board: () => view() } });
-    await slot.findByText(/r1: Make the build faster/);
-    expect(slot.getByText("Goals, 1 of 2 met")).toBeTruthy();
-    expect(slot.getByText(/Proved: 6.2s < 10s/)).toBeTruthy();
-    expect(slot.getByText(/This thread works on intent #4/)).toBeTruthy();
-    expect(slot.getByText(/worktrees at 0123456789/)).toBeTruthy();
-    expect(slot.getByText(/3\/30 intents/)).toBeTruthy();
+    await slot.findByText("Make the build faster");
+    expect(slot.getByText("1 of 2 goals met")).toBeTruthy();
+    expect(slot.getByText("6.2s < 10s")).toBeTruthy();
+    expect(slot.getByText(/works on the highlighted intent/)).toBeTruthy();
+    expect(slot.getByText("Worktrees from 0123456")).toBeTruthy();
+    expect(slot.getByText("3 of 30 used, 3 at once")).toBeTruthy();
     expect(slot.getByText("Enable incremental builds")).toBeTruthy();
-    expect(slot.getByText(/patch does not apply/)).toBeTruthy();
+    // Errors from the server are capitalized for display.
+    expect(slot.getByText("Patch does not apply: src/build/bundle.ts")).toBeTruthy();
     expect(slot.getByText("May I upgrade TypeScript?")).toBeTruthy();
     expect(slot.getByText("CI fails on the cache step.")).toBeTruthy();
-    expect(slot.getByText(/time pnpm build \(exit 0\)/)).toBeTruthy();
+    expect(slot.getByText(/time pnpm build → 0/)).toBeTruthy();
+    expect(slot.getByText("Type checking takes 9s of 12s")).toBeTruthy();
+    expect(slot.getByText("Intent #5")).toBeTruthy();
     expect(slot.inspection.rpcCalls[0]).toMatchObject({ method: "board", input: { threadId: "thr_3" } });
 
-    // Facts start collapsed.
-    expect(slot.queryByText("Type checking takes 9s of 12s")).toBeNull();
-    fireEvent.click(slot.getByText("Recent facts"));
-    expect(slot.getByText("Type checking takes 9s of 12s")).toBeTruthy();
+    // Live intents sort before unmerged and done ones; the thread's own intent is highlighted.
+    const rows = [...slot.container.querySelectorAll("li")].map((li) => li.textContent ?? "");
+    const order = ["Enable incremental builds", "Rewrite the bundler", "Measure the build"].map((t) => rows.findIndex((r) => r.startsWith(t)));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(slot.getByText("Rewrite the bundler").closest("button")!.className).toContain("bg-accent");
 
-    fireEvent.click(slot.getByText("Open the planner thread"));
+    slot.getByText("Rewrite the bundler").closest("button")!.click();
+    expect(slot.inspection.navigateCalls.at(-1)).toMatchObject({ threadId: "thr_3" });
+    slot.getByText("Open planner").click();
     expect(slot.inspection.navigateCalls.at(-1)).toMatchObject({ threadId: "thr_1" });
   });
 
