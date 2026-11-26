@@ -185,6 +185,16 @@ function Header({ view, threadId }: { view: BoardView; threadId: string }) {
   );
 }
 
+type Target = BoardView["run"]["settings"]["reviewer"];
+
+/** A model choice as a label, such as "glm-5.3-flash (acp-opencode)". */
+function target(t: Target | null): string {
+  if (!t || (!t.model && !t.provider)) return "Planner's provider default";
+  const model = t.model ? t.model.split("/").at(-1)! : "Default model";
+  const level = t.reasoningLevel ? `, ${t.reasoningLevel}` : "";
+  return t.provider ? `${model} (${t.provider}${level})` : `${model}${level}`;
+}
+
 function RunDetails({ view }: { view: BoardView }) {
   const { run } = view;
   const s = run.settings;
@@ -204,6 +214,10 @@ function RunDetails({ view }: { view: BoardView }) {
         </DetailRow>
         <DetailRow label="Review">{s.review ? `Required, ${checks}` : `Not required, ${checks}`}</DetailRow>
         <DetailRow label="Workspace">{workspace}</DetailRow>
+        <DetailRow label="Workers" align="start">
+          {s.workers.length ? [...new Set(s.workers.map(target))].join(", ") : target(null)}
+        </DetailRow>
+        <DetailRow label="Reviewer">{target(s.reviewer)}</DetailRow>
         {s.smokeCheck && (
           <DetailRow label="Smoke check">
             <code className="font-mono text-[11px]">{s.smokeCheck}</code>

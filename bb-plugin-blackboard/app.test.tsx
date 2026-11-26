@@ -61,7 +61,7 @@ function view(): BoardView {
         review: true,
         setup: null,
         smokeCheck: "pnpm typecheck",
-        workers: [],
+        workers: [{ provider: "acp-opencode", model: "opencode-go/glm-5.3-flash", reasoningLevel: null }],
         reviewer: { provider: null, model: null, reasoningLevel: null },
       },
     },
@@ -93,6 +93,8 @@ describe("Board tab", () => {
     expect(slot.getByText(/works on the highlighted intent/)).toBeTruthy();
     expect(slot.getByText("Worktrees from 0123456")).toBeTruthy();
     expect(slot.getByText("3 of 30 used, 3 at once")).toBeTruthy();
+    expect(slot.getByText("glm-5.3-flash (acp-opencode)")).toBeTruthy();
+    expect(slot.getByText("Planner's provider default")).toBeTruthy();
     expect(slot.getByText("Enable incremental builds")).toBeTruthy();
     // Errors from the server are capitalized for display.
     expect(slot.getByText("Patch does not apply: src/build/bundle.ts")).toBeTruthy();

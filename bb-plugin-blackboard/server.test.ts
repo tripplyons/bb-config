@@ -16,7 +16,7 @@ type Spawn = {
   title: string;
   parentThreadId?: string;
   pluginMetadata: Record<string, unknown>;
-  environment: { type: string; workspace?: { baseBranch?: { name?: string } } };
+  environment: { type: string; workspace?: { type?: string; baseBranch?: { name?: string } } };
   model?: string;
   providerId?: string;
 };
@@ -76,14 +76,16 @@ async function setup(opts: { settings?: Record<string, string | number | boolean
     sdk: {
       threads: {
         get: async ({ threadId }: { threadId: string }) =>
-          makeThreadResponse({ id: threadId, projectId: "proj_1", environmentId: envOf.get(threadId) ?? "env_1", providerId: "claude-code" }),
+          threadId.startsWith("thr_elsewhere")
+            ? makeThreadResponse({ id: threadId, projectId: "proj_other", environmentId: "env_other", providerId: "codex" })
+            : makeThreadResponse({ id: threadId, projectId: "proj_1", environmentId: envOf.get(threadId) ?? "env_1", providerId: "claude-code" }),
         spawn: async (input: Spawn) => {
           next += 1;
           const id = `thr_${next}`;
           spawns.push(input);
           metadata.set(id, input.pluginMetadata);
           let environmentId = "env_1";
-          if (input.environment.type === "host") {
+          if (input.environment.type === "host" && input.environment.workspace?.type === "managed-worktree") {
             const base = input.environment.workspace!.baseBranch!.name!;
             const path = join(realpathSync(tmpdir()), `bb-wt-${process.pid}-${Date.now()}-${id}`);
             sh(checkout, "worktree", "add", "-q", "--detach", path, base);
@@ -107,6 +109,12 @@ async function setup(opts: { settings?: Record<string, string | number | boolean
         },
         output: async () => ({ output: "final worker message" }),
         getPluginMetadata: async ({ threadId }: { threadId: string }) => metadata.get(threadId) ?? null,
+      },
+      projects: {
+        get: async ({ projectId }: { projectId: string }) => ({
+          id: projectId,
+          sources: [{ id: "src_1", type: "local_path", hostId: "host_local", path: checkout, isDefault: true }],
+        }),
       },
       environments: {
         get: async ({ environmentId }: { environmentId: string }) => ({
@@ -493,9 +501,20 @@ describe("blackboard in a shared checkout", () => {
       {},
     );
     expect(JSON.parse(ok.stdout)).toMatchObject({ runId: "r1", plannerThreadId: "thr_1" });
-    expect(t.spawns[0]!.environment).toEqual({ type: "project-default" });
+    // Without a calling thread in the project, the planner works in the project checkout.
+    expect(t.spawns[0]!.environment).toEqual({ type: "host", hostId: "host_local", workspace: { type: "unmanaged", path: null } });
     await t.call("blackboard_dispatch", { intents: [{ summary: "Do it" }] }, "thr_1");
     expect(t.spawns[1]).toMatchObject({ providerId: "codex", model: "gpt-x" });
+  });
+
+  it("ignores a calling thread from another project", async () => {
+    const t = await setup();
+    await t.harness.behavior.runCli(["start", "do", "it", "--project", "proj_1"], { threadId: "thr_elsewhere" } as never);
+    // A caller in the same project would lend its checkout and provider.
+    await t.harness.behavior.runCli(["start", "do", "it", "--project", "proj_1"], { threadId: "thr_origin" } as never);
+    expect(t.spawns[1]).toMatchObject({ environment: { type: "reuse", environmentId: "env_1" }, providerId: "claude-code" });
+    expect(t.spawns[0]!.environment).toEqual({ type: "host", hostId: "host_local", workspace: { type: "unmanaged", path: null } });
+    expect(t.spawns[0]!.providerId).toBeUndefined();
   });
 });
 

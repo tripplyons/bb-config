@@ -59,8 +59,11 @@ bb blackboard start "Port the CLI from yargs to commander and keep every flag" \
   --parallel 3 --max-intents 20 --deadline 2h
 ```
 
-The run uses the caller thread's environment. Pass `--project <id>` when no
-thread is calling. `--context`, `--source`, `--input`, and `--checks` match the
+The planner works in the calling thread's environment when that thread is in
+the run's project. Otherwise, for example with `--project <id>` from a terminal
+or from another project's thread, it works in the project's own checkout. It
+never gets a fresh worktree, because archiving the planner would then delete
+the run's result. `--context`, `--source`, `--input`, and `--checks` match the
 fields above. `--skip-review` lets the planner complete without a reviewer.
 
 ## How work moves

@@ -503,6 +503,21 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+  /**
+   * The project's own checkout on its default host. bb's project default can
+   * be a fresh worktree, which archiving the planner would retire along with
+   * the run's integrated result, so a run never asks for it.
+   */
+  async function projectCheckout(projectId: string) {
+    const project = await bb.sdk.projects.get({ projectId });
+    const source = project.sources.find((s) => s.isDefault) ?? project.sources[0];
+    if (!source?.hostId) {
+      throw new BoardError(`project ${projectId} has no checkout on a machine. Start the run from a thread in that project.`);
+    }
+    // A null path is the host's configured checkout for the project.
+    return { type: "host" as const, hostId: source.hostId, workspace: { type: "unmanaged" as const, path: null } };
+  }
+
   async function childEnvironment(run: Run) {
     if (run.settings.workspace === "worktree" && run.baselineCommit) {
       const hostId = await hostOf(run);
@@ -513,7 +528,7 @@ export default async function plugin(bb: BbPluginApi) {
       };
     }
     const environmentId = (board.getRun(run.id) ?? run).environmentId;
-    return environmentId ? { type: "reuse" as const, environmentId } : { type: "project-default" as const };
+    return environmentId ? { type: "reuse" as const, environmentId } : await projectCheckout(run.projectId);
   }
 
   function targetArgs(target: Target, fallbackProvider: string | null) {
@@ -723,8 +738,12 @@ export default async function plugin(bb: BbPluginApi) {
     if (ctx.threadId) {
       try {
         const caller = await bb.sdk.threads.get({ threadId: ctx.threadId });
-        environmentId = caller.environmentId ?? null;
-        callerProvider = caller.providerId;
+        // A caller in another project (a CLI call with --project) lends
+        // neither its checkout nor its provider.
+        if (caller.projectId === ctx.projectId) {
+          environmentId = caller.environmentId ?? null;
+          callerProvider = caller.providerId;
+        }
       } catch {
         // A CLI call outside a thread falls back to the project default.
       }
@@ -760,7 +779,7 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       const thread = await bb.sdk.threads.spawn({
         projectId: run.projectId,
-        environment: environmentId ? { type: "reuse", environmentId } : { type: "project-default" },
+        environment: environmentId ? { type: "reuse", environmentId } : await projectCheckout(run.projectId),
         prompt: plannerKickoff(board, run),
         title: oneLine(`Blackboard ${run.id}: ${run.title}`, 80),
         ...targetArgs(toTarget(input.planner), callerProvider ?? null),

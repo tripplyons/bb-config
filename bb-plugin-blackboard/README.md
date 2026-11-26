@@ -61,6 +61,11 @@ cycle. A goal that fails two reviews in a row goes to the user.
 
 ## Worktrees and patches
 
+The planner's checkout is the calling thread's environment when that thread is
+in the run's project, and the project's own checkout otherwise. It is never a
+fresh worktree, because bb retires a worktree when its threads are archived,
+and the checkout holds the run's only copy of the result.
+
 1. The run's baseline is the checkout's HEAD when the run starts.
 2. bb creates each worker's and reviewer's managed worktree at the baseline.
 3. `blackboard_begin` snapshots the checkout's difference from the baseline,
