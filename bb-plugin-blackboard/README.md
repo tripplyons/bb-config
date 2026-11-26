@@ -127,7 +127,8 @@ write invalidates that read, so the tab updates while the run works.
 
 ## Ideas taken from bb-altex
 
-- Goals are acceptance criteria that the user confirms before the run.
+- Goals are acceptance criteria. The starting agent drafts them from a
+  one-sentence task, and the user changes them through the planner.
 - Check intents are limited by mode, and a title that starts with Verify,
   Check, Validate, or Audit counts as a check.
 - Concurrent intents must have disjoint `writes`, or depend on each other.

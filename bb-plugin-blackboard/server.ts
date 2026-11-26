@@ -126,7 +126,7 @@ const startSchema = z.object({
     .array(z.string().trim().min(1))
     .max(10)
     .optional()
-    .describe("Acceptance criteria the user stated or confirmed, each checkable on its own. Omit to let the planner propose them."),
+    .describe("Acceptance criteria, each checkable on its own: the ones the user stated, or ones you drafted from the request."),
   constraints: z
     .array(z.object({ type: z.enum(["allow", "deny"]), text: z.string().trim().min(1) }))
     .max(20)
@@ -142,9 +142,13 @@ const startSchema = z.object({
   parallel: z.number().int().min(1).max(8).optional().describe("Most workers running at once."),
   maxIntents: z.number().int().min(1).max(200).optional().describe("Total intent budget for the run."),
   deadlineMinutes: z.number().int().min(1).max(10080).optional().describe("Minutes until the run should wrap up."),
-  workers: z.array(targetSchema).max(8).optional().describe("Worker models. Intents rotate through them in dispatch order."),
-  reviewer: targetSchema.optional().describe("Reviewer model."),
-  planner: targetSchema.optional().describe("Planner model. Defaults to this thread's provider."),
+  workers: z
+    .array(targetSchema)
+    .max(8)
+    .optional()
+    .describe("Worker models. Intents rotate through them in dispatch order. Omit to use this thread's provider and model."),
+  reviewer: targetSchema.optional().describe("Reviewer model. Omit to use this thread's provider and model."),
+  planner: targetSchema.optional().describe("Planner model. Omit to use this thread's provider and model."),
 });
 export type StartInput = z.infer<typeof startSchema>;
 
@@ -731,10 +735,30 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ------------------------------------------------------------ start
 
+  /**
+   * A thread's provider, plus the model and reasoning level of its latest turn
+   * request. The thread record does not carry the model; the turn event does.
+   */
+  async function threadTarget(threadId: string, providerId: string): Promise<Target> {
+    const target: Target = { ...emptyTarget(), provider: providerId };
+    try {
+      const [row] = await bb.sdk.threads.events.list({ threadId, types: ["client/turn/requested"], order: "desc", limit: "1" });
+      const execution = (row?.data as { execution?: { model?: unknown; reasoningLevel?: unknown } } | undefined)?.execution;
+      if (typeof execution?.model === "string" && execution.model) target.model = execution.model;
+      if (typeof execution?.reasoningLevel === "string" && execution.reasoningLevel) target.reasoningLevel = execution.reasoningLevel;
+    } catch {
+      // Without the event, the provider's default model applies.
+    }
+    return target;
+  }
+
   async function startRun(input: StartInput, ctx: { threadId?: string; projectId?: string }): Promise<{ run: Run; plannerThreadId: string }> {
     if (!ctx.projectId) throw new BoardError("no project: run this from a project thread or pass a project");
     let environmentId: string | null = null;
     let callerProvider: string | undefined;
+    // Roles the request names no model for use the calling thread's model.
+    let callerTarget: Target | null = null;
+    const orCaller = (t: Target): Target => (!t.provider && !t.model && callerTarget ? callerTarget : t);
     if (ctx.threadId) {
       try {
         const caller = await bb.sdk.threads.get({ threadId: ctx.threadId });
@@ -743,6 +767,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (caller.projectId === ctx.projectId) {
           environmentId = caller.environmentId ?? null;
           callerProvider = caller.providerId;
+          callerTarget = await threadTarget(ctx.threadId, caller.providerId);
         }
       } catch {
         // A CLI call outside a thread falls back to the project default.
@@ -758,8 +783,8 @@ export default async function plugin(bb: BbPluginApi) {
       smokeCheck: input.smokeCheck?.trim() || null,
       sources: input.sources ?? [],
       inputs: input.inputs ?? [],
-      workers: input.workers?.length ? input.workers.map(toTarget) : [emptyTarget()],
-      reviewer: toTarget(input.reviewer),
+      workers: input.workers?.length ? input.workers.map((w) => orCaller(toTarget(w))) : [callerTarget ?? emptyTarget()],
+      reviewer: orCaller(toTarget(input.reviewer)),
       workerVisibility: settings.workerVisibility as RunSettings["workerVisibility"],
     };
     let run = board.createRun({
@@ -782,7 +807,7 @@ export default async function plugin(bb: BbPluginApi) {
         environment: environmentId ? { type: "reuse", environmentId } : await projectCheckout(run.projectId),
         prompt: plannerKickoff(board, run),
         title: oneLine(`Blackboard ${run.id}: ${run.title}`, 80),
-        ...targetArgs(toTarget(input.planner), callerProvider ?? null),
+        ...targetArgs(orCaller(toTarget(input.planner)), callerProvider ?? null),
         pluginMetadata: { runId: run.id, role: "planner" },
       });
       run = board.updateRun(run.id, {
@@ -933,7 +958,7 @@ export default async function plugin(bb: BbPluginApi) {
   tool({
     name: "blackboard_start",
     description:
-      "Start a Blackboard run: a separate planner thread turns the request into goals and dispatches parallel worker threads in their own worktrees, which share a board of facts and hints. A fresh reviewer checks each cycle against the goals. Settle the goals, setup command, and models with the user first.",
+      "Start a Blackboard run: a separate planner thread turns the request into goals and dispatches parallel worker threads in their own worktrees, which share a board of facts and hints. A fresh reviewer checks each cycle against the goals. When the user gives only a task, draft the goals, setup command, and smoke check from the repository and start at once. Roles without a model use this thread's provider and model.",
     labels: ["Starting Blackboard run", "Started Blackboard run"],
     parameters: startSchema,
     async execute(input, ctx) {

@@ -109,6 +109,11 @@ async function setup(opts: { settings?: Record<string, string | number | boolean
         },
         output: async () => ({ output: "final worker message" }),
         getPluginMetadata: async ({ threadId }: { threadId: string }) => metadata.get(threadId) ?? null,
+        events: {
+          // The calling thread's latest turn ran on this model.
+          list: async ({ threadId }: { threadId: string }) =>
+            threadId === "thr_origin" ? [{ type: "client/turn/requested", data: { execution: { model: "claude-opus-5-5", reasoningLevel: "high" } } }] : [],
+        },
       },
       projects: {
         get: async ({ projectId }: { projectId: string }) => ({
@@ -505,6 +510,18 @@ describe("blackboard in a shared checkout", () => {
     expect(t.spawns[0]!.environment).toEqual({ type: "host", hostId: "host_local", workspace: { type: "unmanaged", path: null } });
     await t.call("blackboard_dispatch", { intents: [{ summary: "Do it" }] }, "thr_1");
     expect(t.spawns[1]).toMatchObject({ providerId: "codex", model: "gpt-x" });
+  });
+
+  it("gives every role without a model the calling thread's provider and model", async () => {
+    const t = await setup();
+    const planner = await startRun(t, { reviewer: { provider: "codex", model: "gpt-x" } });
+    const caller = { providerId: "claude-code", model: "claude-opus-5-5", reasoningLevel: "high" };
+    expect(t.spawns[0]).toMatchObject(caller);
+    await t.call("blackboard_set_goals", { add: ["Goal"] }, planner);
+    await t.call("blackboard_dispatch", { intents: [{ summary: "Work" }] }, planner);
+    expect(t.spawns[1]).toMatchObject(caller);
+    const view = (await t.harness.behavior.callRpc("board", { threadId: planner })) as BoardView;
+    expect(view.run.settings.reviewer).toMatchObject({ provider: "codex", model: "gpt-x" });
   });
 
   it("ignores a calling thread from another project", async () => {

@@ -17,34 +17,38 @@ project after the user adopts them.
 
 ## Prepare a run
 
-Settle these with the user before you start. Ask once for what the request
-leaves open.
+A one-sentence task is enough. Do not ask the user to fill in settings. Spend
+a few tool calls on the repository, then fill in what the user left out:
 
-- **Goals.** One to ten acceptance criteria, each checkable on its own. Propose
-  criteria if the user gave none, and get them confirmed. The reviewer returns
-  one verdict per goal, so a vague goal gets a vague review.
-- **Shared context.** Conventions, helpers, run commands, or rules of method
-  that every intent needs.
-- **Sources.** Absolute paths of files the work must use.
-- **Ignored inputs.** Absolute paths of git-ignored files the work needs, such
-  as data or `.env` files. Worktrees lack them unless a tracked
-  `.worktreeinclude` copies them. Workers read them from the checkout by path.
-- **Setup command.** What a fresh worktree runs first, such as an install.
-  Leave it out when a tracked `.bb-env-setup.sh` already covers it.
-- **Smoke check.** One fast command, such as a typecheck. It runs in the
-  checkout after each integration.
-- **Models.** Run `bb provider list` and `bb provider models <provider>`.
-  Choose one or more worker models and one reviewer model. Ask the user when
-  they named none. Intents rotate through the worker models.
+- **Goals.** Draft one to five acceptance criteria from the request, each
+  checkable on its own, such as a command that must exit 0 or a behavior
+  someone can observe. Do not add work the user did not ask for. The reviewer
+  returns one verdict per goal, so a vague goal gets a vague review.
+- **Setup command.** The install a fresh worktree needs, from the lockfile or
+  the docs, such as `npm ci` or `uv sync`. Add a `cd` into the package folder
+  when it is not at the root. Leave it out when a tracked `.bb-env-setup.sh`
+  covers it or nothing needs installing.
+- **Smoke check.** One fast command, such as a typecheck or the package's
+  tests. It runs in the checkout after each integration.
+- **Constraints, shared context, sources, and ignored inputs.** Only what the
+  user stated, plus run commands you found. Worktrees lack git-ignored files
+  unless a tracked `.worktreeinclude` copies them, so pass their absolute paths
+  as inputs.
+- **Models.** Leave them out unless the user named some. Every role then uses
+  the calling thread's provider and model. Users can name models with
+  `bb provider list` and `bb provider models <provider>`.
 - **Check intents.** `once` (default, one per cycle), `review` (none), or
   `thorough` (one per piece of work that matters).
 
+Ask the user only when the request is too vague to draft any checkable goal.
+
 ## Start a run
 
-From an agent thread, call `blackboard_start` with the user's full request and
-the settled fields. The planner sees only that text, so include every detail
-the user gave. Then give the user the planner thread link and stop. Do not do
-the work yourself.
+From an agent thread, call `blackboard_start` with the user's full request, a
+short title, and the fields you drafted. The planner sees only that text, so
+include every detail the user gave. Then give the user the planner thread link
+and the goals you drafted, and tell them they can change goals or settings by
+talking to the planner. Do not do the work yourself.
 
 From a terminal:
 

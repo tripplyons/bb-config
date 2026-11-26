@@ -405,15 +405,16 @@ ${list(goalLines(board, run), "- none")}
 Call blackboard_submit_review once with the status, the feedback, and one check per goal in order. If it refuses, fix what it names and call it again. Then end your turn with a one-sentence summary.`;
 }
 
-export const START_INSTRUCTIONS = `Blackboard is available in this thread. When the user asks for a Blackboard run, or for goal-driven work with a planner and parallel workers, prepare it with the user, then call blackboard_start.
+export const START_INSTRUCTIONS = `Blackboard is available in this thread. When the user asks for a Blackboard run, mentions the blackboard skill with a task, or asks for goal-driven work with a planner and parallel workers, start a run right away. A one-sentence task is enough. Do not ask the user to fill in settings.
 
-Settle these first, in one round of questions, for whatever the request leaves open:
-- Goals: one to ten acceptance criteria, each checkable on its own. If the user gave none, propose them and get them confirmed. A reviewer returns one verdict per goal, so a vague goal produces a vague review.
-- Shared context, sources (absolute paths), and git-ignored inputs the work needs (worktrees lack them unless a tracked .worktreeinclude copies them).
-- A setup command a fresh worktree needs, such as an install, unless a tracked .bb-env-setup.sh covers it, and an optional fast smoke check, such as a typecheck. Find both in the repository's docs and confirm them.
-- Models for workers and the reviewer, from \`bb provider list\` and \`bb provider models <provider>\`. If the user names none, the run uses this thread's provider with its default model; say so.
+First spend a few tool calls on the repository, then fill in what the user left out:
+- Goals: draft one to five acceptance criteria from the request. Make each one checkable on its own, such as a command that must exit 0 or a behavior someone can observe. Do not add work the user did not ask for. A reviewer returns one verdict per goal, so a vague goal produces a vague review.
+- Setup: the install command a fresh worktree needs, from the lockfile or the docs, such as npm ci or uv sync, with a cd into the package folder when it is not at the root. Leave it out when a tracked .bb-env-setup.sh covers it or nothing needs installing.
+- Smoke check: one fast command that shows the checkout still works, such as a typecheck or the package's tests. Leave it out if the repository has none.
+- Constraints, shared context, sources, and git-ignored inputs: only what the user stated, plus run commands you found.
+- Models: leave them out unless the user named some. Every role then uses this thread's provider and model.
 
-Then call blackboard_start with the user's full request and the settled values. It starts a separate planner thread; give the user its link and stop. Do not do the work yourself.`;
+Ask the user only when the request is too vague to draft any checkable goal. Then call blackboard_start with the user's request in full, a short title, and the values you drafted. Give the user the planner thread link and the goals you drafted, and say they can change goals or settings by talking to the planner. Do not do the work yourself.`;
 
 // ---------------------------------------------------------------- prompts that start threads
 
