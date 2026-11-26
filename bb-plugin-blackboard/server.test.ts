@@ -8,6 +8,7 @@ import {
   makePluginAgentConfigurationContext,
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
+import { smoke } from "./git.js";
 import type { BoardView } from "./rpc.js";
 import plugin, { PLANNER_TOOLS, REVIEWER_TOOLS, START_TOOLS, WORKER_TOOLS } from "./server.js";
 
@@ -643,5 +644,17 @@ describe("blackboard with worktrees", () => {
     expect(text(done)).toMatch(/applied to the checkout/);
     expect(readFileSync(join(repo, "notes.txt"), "utf8")).toBe("one\nTWO (2)\nthree\n");
     expect(text(await t.call("blackboard_overview", {}, planner))).not.toMatch(/\[unmerged\]/);
+  });
+});
+
+describe("smoke check", () => {
+  it("does not pass the bb server's NODE_ENV to the command", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const result = await smoke(tmpdir(), 'test -z "$NODE_ENV"');
+      expect(result).toMatchObject({ status: "passed", exitCode: 0 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

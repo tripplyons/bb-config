@@ -25,14 +25,32 @@ interface RunResult {
   code: number;
 }
 
-function run(cmd: string, args: string[], opts: { cwd: string; env?: Record<string, string>; timeoutMs?: number }): Promise<RunResult> {
+/**
+ * Variables of the bb server process that must not reach a user's command.
+ * The server runs with NODE_ENV=production, which makes React and other
+ * libraries load production builds, so a project's tests fail in a smoke
+ * check while they pass in a terminal.
+ */
+const SERVER_ONLY_ENV = ["NODE_ENV"];
+
+function userEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of SERVER_ONLY_ENV) delete env[key];
+  return env;
+}
+
+function run(
+  cmd: string,
+  args: string[],
+  opts: { cwd: string; env?: Record<string, string>; timeoutMs?: number; userCommand?: boolean },
+): Promise<RunResult> {
   return new Promise((resolve) => {
     execFile(
       cmd,
       args,
       {
         cwd: opts.cwd,
-        env: { ...process.env, ...opts.env },
+        env: { ...(opts.userCommand ? userEnv() : process.env), ...opts.env },
         maxBuffer: MAX_BUFFER,
         encoding: "buffer",
         timeout: opts.timeoutMs ?? 0,
@@ -206,7 +224,7 @@ export interface SmokeResult {
 
 /** Runs the smoke check in the checkout, with a ten-minute limit. */
 export async function smoke(root: string, command: string, timeoutMs = 600_000): Promise<SmokeResult> {
-  const result = await run("sh", ["-c", command], { cwd: root, timeoutMs });
+  const result = await run("sh", ["-c", command], { cwd: root, timeoutMs, userCommand: true });
   const output = `${result.stdout.toString()}${result.stderr}`;
   return { status: result.code === 0 ? "passed" : "failed", exitCode: result.code, tail: output.slice(-2000), at: Date.now() };
 }
