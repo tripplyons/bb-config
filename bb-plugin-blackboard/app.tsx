@@ -18,6 +18,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { ReactNode } from "react";
 import { rpcContract, type BoardView, type NodeView } from "./rpc";
+import { ago, cap, minutes, source } from "./format";
 
 export const TAB_ID = "board";
 
@@ -31,23 +32,6 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 const numbers = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => typeof x === "number") : []);
-
-function minutes(ms: number): string {
-  const m = Math.round(Math.abs(ms) / 60_000);
-  if (m < 1) return "under a minute";
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
-}
-
-function ago(at: number): string {
-  return Date.now() - at < 60_000 ? "Just now" : `${minutes(Date.now() - at)} ago`;
-}
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-/** A fact's source as a label, such as "Tool output". */
-const source = (f: NodeView) => cap(String(f.data.source).replace(/_/g, " "));
 
 // ---------------------------------------------------------------- status dots
 
