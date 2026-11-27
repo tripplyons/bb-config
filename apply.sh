@@ -21,3 +21,13 @@ for t in theme/*/; do
   cp "$t"* "$theme_dir/$name/"
 done
 bb theme set tripp
+
+# User skills
+skills_dir="$(dirname "$theme_dir")/skills"
+mkdir -p "$skills_dir"
+for s in skills/*/; do
+  [ -d "$s" ] || continue
+  name=$(basename "$s")
+  rm -rf "$skills_dir/$name"
+  cp -R "${s%/}" "$skills_dir/$name"
+done

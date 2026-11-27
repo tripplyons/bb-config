@@ -6,6 +6,8 @@ This repo holds my bb configuration. bb stores its settings in `~/.bb/bb.db`, so
 
 - `provider-acp/custom-agents.json`: the `customAgents` setting of the ACP providers plugin. Each entry becomes provider `acp-<id>`.
 - `theme/tripp/theme.css`: the app theme. It sets a 20px base font and darker colors for both light and dark mode.
+- `skills/`: bb user skills copied into `~/.bb/skills/` by `apply.sh`.
+  - `skill-distill/SKILL.md`: distills a successful bb reference thread into a reusable skill for a chosen student model by running parallel child-thread trials in bb, iterating on the first divergence, and waiting for user acceptance.
 - `plugins/plugins.json`: every installed plugin, with its source and whether it is enabled. Run `./scripts/plugins.py export` after you change plugins in bb to update it.
 - `scripts/plugins.py`: exports the plugin list from bb, or applies it. Apply installs missing plugins and enables or disables each one to match. It reports plugins that are installed but not in the file, and leaves them alone.
 - `bb-plugin-thread-graph/`: my Thread Graph plugin. `plugins.json` installs it from this path. Run `npm install` and `bb plugin build .` in it before `apply.sh` on a new machine, because `dist/` is not committed.
@@ -23,7 +25,7 @@ This repo holds my bb configuration. bb stores its settings in `~/.bb/bb.db`, so
   - `concurrency.json`: the overall thread limit (`null` means unlimited) and per-host overrides keyed by host id. A host not listed uses the automatic limit, one thread per processor.
 - `scripts/settings.py`: exports or applies the files in `settings/`.
 - `export.sh`: copies the current plugin list and settings from bb into this repo. Run it after you change something in the bb app.
-- `apply.sh`: applies the plugin list and settings, writes the ACP agents with `bb plugin config`, copies the theme into `~/.bb/theme`, and runs `bb theme set tripp`.
+- `apply.sh`: applies the plugin list and settings, writes the ACP agents with `bb plugin config`, copies the theme into `~/.bb/theme`, runs `bb theme set tripp`, and copies `skills/` into `~/.bb/skills`.
 
 ## Export and apply
 
