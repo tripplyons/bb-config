@@ -1,4 +1,5 @@
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
+import { installSuppressThreadEntryFocus } from "./focus";
 import { buildCollapseComposerStyles } from "./styles";
 
 export const STYLE_ATTRIBUTE = "data-bb-auto-collapse-composer";
@@ -17,11 +18,14 @@ export default definePluginApp((app) => {
       const target = document.head ?? document.documentElement;
       target.appendChild(style);
 
+      const disposeFocusSuppression = installSuppressThreadEntryFocus(signal);
+
       let disposed = false;
       const dispose = () => {
         if (disposed) return;
         disposed = true;
         signal.removeEventListener("abort", dispose);
+        disposeFocusSuppression();
         style.remove();
       };
 
