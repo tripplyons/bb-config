@@ -115,3 +115,30 @@ div[style*="gap"] > :has(> [class~="group/message"][class~="px-2"]):has(+ * [cla
   > [class~="relative"][class~="h-5"]:not(:has([data-menu-open])) {
   pointer-events: none;
 }
+
+/*
+ * Let the queued-messages drawer size to its content instead of bb's hardcoded 16px-based
+ * pixel heights (44px collapsed, 69 + 33*n px expanded), which clip rows when html font-size
+ * is scaled up to 20px. Inline editing ("workspace" mode) measures live DOM rects, so leave it
+ * alone.
+ */
+section[aria-label="Queued messages"]:not(:has(> header[data-queued-messages-mode="workspace"])) {
+  height: auto !important;
+  max-height: clamp(12.375rem, 30vh, 22.5rem);
+}
+section[aria-label="Queued messages"]:has(> header[data-queued-messages-mode="drawer"])
+  > [data-queued-messages-scroll-frame] {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+}
+section[aria-label="Queued messages"]:has(> header[data-queued-messages-mode="drawer"])
+  > [data-queued-messages-scroll-frame]
+  > [data-queued-messages-scroll] {
+  height: auto;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+section[aria-label="Queued messages"] > [data-queued-messages-scroll-frame][aria-hidden="true"] {
+  display: none;
+}
