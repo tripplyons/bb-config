@@ -487,12 +487,44 @@ describe("blackboard in a shared checkout", () => {
     expect((await t.harness.behavior.runCli(["show", "r1"], {})).stdout).toContain("try esbuild");
     expect((await t.harness.behavior.runCli(["cleanup", "r1"], {})).exitCode).not.toBe(0);
     const cancel = await t.harness.behavior.runCli(["cancel", "r1"], {});
-    expect(cancel.stdout).toMatch(/canceled; stopped 1 thread/);
-    expect(t.stops).toContain("thr_2");
+    expect(cancel.stdout).toMatch(/canceled; stopped 2 threads/);
+    expect(t.stops).toEqual(["thr_2", planner]);
     expect((await t.harness.behavior.runCli(["runs"], {})).stdout).not.toContain("r1 ");
     expect((await t.harness.behavior.runCli(["worktrees", "r1"], {})).stdout).toContain("thr_2");
     expect((await t.harness.behavior.runCli(["cleanup", "r1"], {})).stdout).toMatch(/Archived 1 child thread/);
     expect(t.archived).toEqual(["thr_2"]);
+  });
+
+  it("keeps a canceled run canceled while its planner is still mid-turn", async () => {
+    const t = await setup();
+    const planner = await startRun(t);
+    await t.call("blackboard_set_goals", { add: ["Goal"] }, planner);
+    const spawnsBefore = t.spawns.length;
+    expect((await t.harness.behavior.runCli(["cancel", "r1"], {})).stdout).toMatch(/canceled; stopped 1 thread/);
+    expect(t.stops).toEqual([planner]);
+    // The planner's turn was already running and calls tools after the cancel.
+    for (const [name, input] of [
+      ["blackboard_dispatch", { intents: [{ summary: "Late work" }] }],
+      ["blackboard_set_goals", { add: ["Late goal"] }],
+      ["blackboard_request_review", {}],
+    ] as const) {
+      const result = await t.call(name, input, planner);
+      expect(isError(result), `${name}: ${text(result)}`).toBe(true);
+      expect(text(result)).toMatch(/canceled by the user/);
+    }
+    expect(t.spawns).toHaveLength(spawnsBefore);
+    expect((await t.harness.behavior.runCli(["runs", "--all"], {})).stdout).toMatch(/r1\s+\[canceled\]/);
+    // Finished-run tools still work, and the user can still reopen the run.
+    expect(isError(await t.call("blackboard_cleanup", {}, planner))).toBe(false);
+    expect((await t.harness.behavior.runCli(["goal", "r1", "User", "goal"], {})).exitCode).toBe(0);
+    expect((await t.harness.behavior.runCli(["runs"], {})).stdout).toMatch(/r1\s+\[running\]/);
+  });
+
+  it("does not stop the planner when the planner cancels its own run", async () => {
+    const t = await setup();
+    const planner = await startRun(t);
+    expect((await t.harness.behavior.runCli(["cancel", "r1"], { threadId: planner })).stdout).toMatch(/canceled; stopped 0 threads/);
+    expect(t.stops).toEqual([]);
   });
 
   it("starts from the CLI with models and requires a project", async () => {

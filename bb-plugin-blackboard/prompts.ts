@@ -448,6 +448,10 @@ function environmentLines(run: Run, firstCall: string): string[] {
   return lines;
 }
 
+/** Stopping a thread does not kill processes it detached, so the thread must. */
+const PROCESS_RULE =
+  "Stop every server, browser session, or other background process you start before you finish or end your turn, including when the run is canceled. Stopping your thread does not stop a detached process.";
+
 export function workerBrief(board: Board, run: Run, intent: BoardNode): string {
   const writes = (intent.data.writes as string[] | undefined) ?? [];
   const goals = board.listNodes(run.id, "goal");
@@ -491,6 +495,7 @@ export function workerBrief(board: Board, run: Run, intent: BoardNode): string {
   if (intent.data.check) {
     out.push("", "## Check intent", "Verify the work of the intents in Dependencies against the criteria. Run it. Report each defect with the path, the command, and the result. Change nothing unless your path list allows it.");
   }
+  out.push("", "## Processes", PROCESS_RULE);
   out.push("", "Start now: call blackboard_begin, do only this intent, record facts as you go, then call blackboard_finish_intent.");
   return out.join("\n");
 }
@@ -512,6 +517,7 @@ export function reviewerBrief(board: Board, run: Run, review: BoardNode): string
   const previous = board.lastVerdict(run.id);
   out.push("", "## Previous review", previous ? [`${oneLine(String(previous.data.feedback ?? ""), 1500)}`, ...reviewBlock(board, previous).slice(1)].join("\n") : "none");
   if (review.detail) out.push("", "## Note from the planner", clip(review.detail, 2000));
+  out.push("", "## Processes", PROCESS_RULE);
   out.push("", `Start now: call blackboard_begin, judge each of the ${goals.length} goals, then call blackboard_submit_review.`);
   return out.join("\n");
 }

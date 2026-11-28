@@ -545,9 +545,22 @@ export class Board {
     return this.requireRun(id);
   }
 
-  /** Reopens a finished run. Used when the user adds a goal or work. */
-  reopen(runId: string): Run {
+  /**
+   * Refuses work that would reopen a run the user canceled. Only the user
+   * reopens a canceled run; a planner or reviewer that is still mid-turn when
+   * the cancel lands must not bring it back.
+   */
+  assertReopenable(runId: string, origin: string): Run {
     const run = this.requireRun(runId);
+    if (run.status === "canceled" && origin !== "user") {
+      throw new BoardError(`run ${runId} was canceled by the user. Stop planning and end your turn.`);
+    }
+    return run;
+  }
+
+  /** Reopens a finished run. Used when the user adds a goal or work. */
+  reopen(runId: string, origin: string): Run {
+    const run = this.assertReopenable(runId, origin);
     if (run.status === "running") return run;
     return this.updateRun(runId, { status: "running", finishedAt: null });
   }
@@ -705,6 +718,7 @@ export class Board {
   // ------------------------------------------------------------ goals and constraints
 
   addGoals(runId: string, texts: string[], origin: string): BoardNode[] {
+    this.assertReopenable(runId, origin);
     const existing = new Set(this.listNodes(runId, "goal").map((g) => normalizeText(g.summary)));
     const added: BoardNode[] = [];
     for (const raw of texts) {
@@ -715,14 +729,15 @@ export class Board {
       existing.add(key);
       added.push(this.addNode({ runId, kind: "goal", status: "open", summary: text, origin }));
     }
-    if (added.length) this.reopen(runId);
+    if (added.length) this.reopen(runId, origin);
     return added;
   }
 
   reopenGoal(runId: string, goalId: number, reason: string, origin: string): BoardNode {
     this.requireNode(goalId, runId, "goal");
+    this.assertReopenable(runId, origin);
     this.db.prepare(`DELETE FROM edges WHERE to_id = ? AND rel = 'proves'`).run(goalId);
-    this.reopen(runId);
+    this.reopen(runId, origin);
     return this.updateNode(goalId, { status: "open", data: { proof: null, reopened: { reason, origin, at: this.now() } } });
   }
 
@@ -811,7 +826,7 @@ export class Board {
    * same batch by its `key`.
    */
   addIntents(runId: string, specs: IntentSpec[], origin: string): BoardNode[] {
-    const run = this.requireRun(runId);
+    const run = this.assertReopenable(runId, origin);
     if (specs.length === 0) throw new BoardError(`give at least one intent`);
     if (specs.length > 4) throw new BoardError(`dispatch at most 4 intents per call; keep the highest-value ones`);
     if (run.deadlineAt !== null && this.now() > run.deadlineAt) {
@@ -930,7 +945,7 @@ export class Board {
       }
     });
     tx();
-    this.reopen(runId);
+    this.reopen(runId, origin);
     return added;
   }
 

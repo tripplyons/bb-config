@@ -370,10 +370,19 @@ export default async function plugin(bb: BbPluginApi) {
     return role;
   }
 
-  async function requirePlanner(threadId: string): Promise<Run> {
+  /**
+   * Resolves the calling planner's run. A canceled run refuses planner work,
+   * because the planner may still be mid-turn when the user cancels; only
+   * tools for a finished run (cleanup, lessons) pass `finished`.
+   */
+  async function requirePlanner(threadId: string, opts: { finished?: boolean } = {}): Promise<Run> {
     const role = await resolveRole(threadId);
     if (role?.role !== "planner") throw new BoardError("only a Blackboard planner thread can use this tool");
-    return board.requireRun(role.run.id);
+    const run = board.requireRun(role.run.id);
+    if (run.status === "canceled" && !opts.finished) {
+      throw new BoardError(`run ${run.id} was canceled by the user. Stop planning and end your turn.`);
+    }
+    return run;
   }
 
   async function requireWorker(threadId: string): Promise<{ run: Run; intent: BoardNode }> {
@@ -566,6 +575,8 @@ export default async function plugin(bb: BbPluginApi) {
     const workers = run.settings.workers.length ? run.settings.workers : [emptyTarget()];
     const started: Started[] = [];
     for (const intent of ready) {
+      // The user may cancel while earlier spawns are in flight.
+      if (board.getRun(runId)?.status !== "running") break;
       const target = workers[Number(intent.data.target ?? 0) % workers.length]!;
       try {
         const thread = await bb.sdk.threads.spawn({
@@ -580,6 +591,11 @@ export default async function plugin(bb: BbPluginApi) {
         });
         board.markIntentStarted(intent.id, thread.id);
         started.push({ intent, threadId: thread.id });
+        if (board.getRun(runId)?.status !== "running") {
+          // The run finished while this worker spawned; stopLiveWork missed it.
+          await stopLiveWork(board.requireRun(runId), "the run finished while the worker started");
+          break;
+        }
       } catch (error) {
         board.finishIntent(intent.id, { status: "blocked", summary: "", origin: "blackboard", error: `could not start a worker: ${message(error)}` });
         started.push({ intent, error: message(error) });
@@ -1416,7 +1432,7 @@ export default async function plugin(bb: BbPluginApi) {
     labels: ["Cleaning up the run", "Cleaned up the run"],
     parameters: z.object({}),
     async execute(_params, ctx) {
-      const run = await requirePlanner(ctx.threadId);
+      const run = await requirePlanner(ctx.threadId, { finished: true });
       return archiveReport(await archiveChildren(run));
     },
   });
@@ -1432,7 +1448,7 @@ export default async function plugin(bb: BbPluginApi) {
       fromUser: z.boolean().optional().describe("Must be true for adopt and retire: the user asked for this change."),
     }),
     async execute(params, ctx) {
-      const run = await requirePlanner(ctx.threadId);
+      const run = await requirePlanner(ctx.threadId, { finished: true });
       if (params.action === "list") {
         const lessons = board.listLessons({ projectId: run.projectId, statuses: ["candidate", "adopted"] });
         if (!lessons.length) return "No lessons in this project.";
@@ -2041,15 +2057,28 @@ export default async function plugin(bb: BbPluginApi) {
           },
         }),
         cancel: cliCommand({
-          summary: "Cancel a run and stop its workers and reviewer",
+          summary: "Cancel a run and stop its workers, reviewer, and planner",
           positionals: [{ name: "run", description: "Run id", required: true }],
-          async run(input) {
+          async run(input, ctx) {
             return wrap(async () => {
-              const run = cliRun(input.positionals.run);
-              if (FINISHED_RUN.includes(run.status)) return out(`Run ${run.id} already finished as ${run.status}.`);
-              const stopped = await stopLiveWork(run, "the user canceled the run");
-              board.updateRun(run.id, { status: "canceled", finishedAt: Date.now(), summary: "Canceled by the user." });
-              await notifyPlanner(run, `[Blackboard] The user canceled run ${run.id}. Stop planning.`);
+              const found = cliRun(input.positionals.run);
+              if (FINISHED_RUN.includes(found.status)) return out(`Run ${found.id} already finished as ${found.status}.`);
+              // Mark the run canceled first, so a planner that is still mid-turn
+              // cannot dispatch more work or reopen it while workers stop.
+              const run = board.updateRun(found.id, { status: "canceled", finishedAt: Date.now(), summary: "Canceled by the user." });
+              let stopped = await stopLiveWork(run, "the user canceled the run");
+              // A queued message would wait until the planner's turn ends, so
+              // stop the turn itself, unless the planner is the one canceling.
+              const planner = run.plannerThreadId;
+              if (planner && planner !== ctx?.threadId) {
+                try {
+                  await bb.sdk.threads.stop({ threadId: planner });
+                  stopped += 1;
+                } catch (error) {
+                  bb.log.warn(`could not stop planner ${planner}: ${message(error)}`);
+                }
+              }
+              await notifyPlanner(run, `[Blackboard] The user canceled run ${run.id}. Your planner tools now refuse work. Do not start servers, browsers, or other processes; stop any you started, then end your turn.`);
               return out(`Run ${run.id} canceled; stopped ${stopped} thread${stopped === 1 ? "" : "s"}.`);
             });
           },

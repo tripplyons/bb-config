@@ -106,7 +106,7 @@ Each of these commands records the change and tells the planner:
 | `bb blackboard goal <run> <text>` | Adds a goal, which reopens a finished run. |
 | `bb blackboard constraint <run> <text> --type deny\|allow` | Adds a rule every new worker sees. |
 | `bb blackboard answer <question-id> <text>` | Answers a worker's question; the worker resumes. |
-| `bb blackboard cancel <run>` | Stops every worker and the reviewer, and ends the run. |
+| `bb blackboard cancel <run>` | Ends the run, then stops its workers, reviewer, and planner turn. The planner's tools refuse work on a canceled run, so only the user can reopen it. |
 | `bb blackboard cleanup <run>` | Archives a finished run's child threads, which retires their worktrees. |
 
 When two reviews in a row fail the same goal, the planner stops and asks the
